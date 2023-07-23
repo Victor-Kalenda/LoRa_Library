@@ -1,5 +1,5 @@
 /**
- * @file      sx126x.h
+ * @file      LoRa_Library.h
  *
  * @brief     SX126x radio driver definition
  *
@@ -32,8 +32,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef SX126X_H
-#define SX126X_H
+#ifndef LORA_LIBRARY_H
+#define LORA_LIBRARY_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -1257,6 +1257,6 @@ void sx126x_get_lora_params_from_header( const void* context, sx126x_lora_cr_t* 
 }
 #endif
 
-#endif  // SX126X_H
+#endif  // LORA_LIBRARY_H
 
 /* --- EOF ------------------------------------------------------------------ */

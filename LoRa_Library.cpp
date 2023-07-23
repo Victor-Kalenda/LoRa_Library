@@ -1,5 +1,5 @@
 /**
- * @file      sx126x.c
+ * @file      LoRa_Library.cpp
  *
  * @brief     SX126x radio driver implementation
  *
@@ -39,7 +39,7 @@
 
 #include <string.h>  // memcpy
 #include <Arduino.h>
-#include "sx126x.h"
+#include "LoRa_Library.h"
 #include "sx126x_hal.h"
 #include "sx126x_regs.h"
 
