@@ -123,6 +123,18 @@
  */
 #define SX126X_REG_OCP 0x08E7
 
+// Victor Kalenda Addition Start
+/**
+ * @brief The address of the register used to set the node address of the chip in gfsk mode
+ */
+ #define SX126X_REG_NODE_ADDRESS 0x06CD
+
+/**
+ * @brief The address of the register used to set the broadcast address of the chip in gfsk mode
+ */
+#define SX126X_REG_BROADCAST_ADDRESS 0x06CE
+// Victor Kalenda Addition End
+
 /**
  * @brief WORKAROUND - Optimizing the Inverted IQ Operation, see DS_SX1261-2_V1.2 datasheet chapter 15.4
  */

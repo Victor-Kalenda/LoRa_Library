@@ -83,7 +83,7 @@ typedef enum sx126x_hal_status_e
 /*
 SPI Pin Initialization
 */
-void sx126x_hal_init( uint8_t cs_pin, uint8_t reset_pin, uint8_t busy_pin, uint16_t dio1);
+void sx126x_hal_init( uint8_t cs_pin, uint8_t reset_pin, uint8_t busy_pin, int8_t dio1);
 
 static uint8_t SPI_tx_rx( uint8_t data );
 /**

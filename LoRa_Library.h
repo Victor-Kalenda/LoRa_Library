@@ -1,5 +1,5 @@
 /**
- * @file      LoRa_Library.h
+ * @file      sx126x.h
  *
  * @brief     SX126x radio driver definition
  *
@@ -206,6 +206,9 @@ typedef enum sx126x_gfsk_pulse_shape_e
 /**
  * @brief SX126X GFSK Rx bandwidth enumeration definition
  */
+ // missing 0x10 = 17
+ // 0x18 = 
+ // 
 typedef enum sx126x_gfsk_bw_e
 {
     SX126X_GFSK_BW_4800   = 0x1F,
@@ -537,18 +540,40 @@ typedef struct sx126x_chip_status_s
 
 // Victor Kalenda Addition Start
 
+/**
+ * @brief SX126X chip type enumeration definition
+ */
 typedef enum chip_type_e
 {
   SX1262,
   SX1261,
 }chip_type_t;
 
+/**
+ * @brief SX126X crystal oscillator enumeration definition
+ */
 typedef enum crystal_e
 {
   XTAL,
   TCXO,
 }crystal_t;
 
+/**
+ * @brief SX126X transmit power enumeration definition
+ */
+typedef enum sx126x_tx_power_e
+{
+    SX126X_TX_10DBM = 0x00,
+    SX126X_TX_14DBM = 0x01,
+    SX126X_TX_15DBM = 0x02,
+    SX126X_TX_17DBM = 0x03,
+    SX126X_TX_20DBM = 0x04,
+    SX126X_TX_22DBM = 0x05,
+} sx126x_tx_power_t;
+
+/**
+ * @brief SX126X start parameter structure definition
+ */
 typedef struct start_params_s
 {
   // defines the components of your system
@@ -563,7 +588,7 @@ typedef struct start_params_s
   uint8_t busy;  // Ensures SPI commands arn't sent to the sx126x while the chip is busy
 
   // Optional interrupt handling
-  uint16_t dio1;
+  int8_t dio1;
 
 } start_params_t;
 
@@ -585,73 +610,84 @@ typedef struct sx126x_irq_s
   volatile bool timeout;
   volatile bool lr_fhss_hop;
 } sx126x_irq_t;
-  
 
 /*
 * -----------------------------------------------------------------------------
 * --- PUBLIC FUNCTIONS PROTOTYPES ---------------------------------------------
 */
 
-void initialize_chip(start_params_t setup);
-// variable setters
 /*
   Users will be able to switch between modulation types during runtime.
-  Users will be able to change every modulation setting and packet setting in one function
-  Users must be able to change individual packet and modulation params as well
+  Users can set parameters for modulation types other then the modulation type the chip is set to
+  Once set, the next packet will have the given modulation / packet parameter if the parameters for the modulation type were changed
+  If in rx_continous, setting a parameter will set the sx126x in rx_continous with the new settings
 */
 
-// Each time you set the parameters, flip a bool to identify that the chip needs to be sent SPI configurations check this bool before every transmission / reception
-// Also check and see what mode the chip is currently in (if in receive mode or stationary, send the settings, if in tx wait)
-// packet parameter setters lora
+void initialize_chip(start_params_t setup);
+
+// Packet parameter setters lora
 void lora_crc_on(bool crc_is_on);
 void lora_invert_iq(bool invert_iq_is_on);
 void lora_set_header_type(sx126x_lora_pkt_len_modes_t header_type);
 void lora_set_pld_len(uint8_t payload_length_in_bytes);
 bool lora_set_pre_len(uint16_t preamble_length_in_symbols);
 
-// modulation parameter setters lora
+// Modulation parameter setters lora
 void lora_set_sf(sx126x_lora_sf_t spreadfactor);
 void lora_set_bw(sx126x_lora_bw_t bandwidth);
 void lora_set_cr(sx126x_lora_cr_t coderate);
 void lora_set_ldro(bool ldro_is_on);
+void lora_set_auto_ldro(bool auto_ldro_is_on);
 
-// packet parameter setters gfsk
+
+// Packet parameter setters gfsk
 bool gfsk_set_pre_len(uint16_t preamble_len_in_bits);
 void gfsk_set_pre_detector(sx126x_gfsk_preamble_detector_t preamble_detection_length);
 void gfsk_addr_filter(sx126x_gfsk_address_filtering_t address_filtering);
 void gfsk_set_header_type(sx126x_gfsk_pkt_len_modes_t header_type);
-void gfsk_set_pld_len(uint8_t pld_len_in_bytes);
+bool gfsk_set_pld_len(uint8_t pld_len_in_bytes);
 void gfsk_crc(sx126x_gfsk_crc_types_t crc_type);
 void gfsk_whitening_on(sx126x_gfsk_dc_free_t dc_free);
 
-// modulation parameter setters gfsk
+// Modulation parameter setters gfsk
 bool gfsk_set_br(uint32_t br_in_bps);
 bool gfsk_set_fdev(uint32_t fdev_in_hz);
 void gfsk_set_ps(sx126x_gfsk_pulse_shape_t pulse_shape);
 bool gfsk_set_bw(sx126x_gfsk_bw_t bw_dsb_param);
 
-// modulation types
-void default_fhss_setup();
-void set_packet_type(sx126x_pkt_type_t type); // 3 types of packets, lora, gfsk, fhss, function used to switch chip between modulation types during runtime
+// Modulation type setters
+void set_packet_type(sx126x_pkt_type_t type); // 2 types of packets, lora, gfsk, function used to switch chip between modulation types during runtime
 
+// Transmit and Receive actuation functions
 void transmit(uint8_t *buffer);
 void receive_mode();
+void receive_mode_duty_cycle(uint32_t rx_time, uint32_t sleep_time);
 void read_transmit_buffer(uint8_t* buffer);
-void set_transmit_timeout(uint32_t timeout_in_ms); // 262 143 ms is the max timeout, used for receive function
+void set_transmit_timeout(uint32_t timeout_in_ms); // 262 143 ms is the max timeout
 void set_transmit_buffer_address(uint8_t address);
 void read_receive_buffer(uint8_t* buffer);
 void set_receive_timeout(uint32_t timeout_in_ms); // 262 143 ms is the max timeout, used for receive function
 void set_receive_buffer_address(uint8_t address);
-void set_power(uint8_t power_in_dbm); // used in init function for default 14dbm. Pa_config handled according to datasheet
-void set_frequency(uint32_t frequency_in_hz); // depending on chip mode, call set_rx within function
 
-// Variable Getters
+// Miscellaneous Parameter setters
+void set_power(sx126x_tx_power_t power_in_dbm); // used in init function for default 14dbm. Pa_config handled according to datasheet
+void set_frequency(uint32_t frequency_in_hz); // depending on chip mode, call set_rx within function
+void gfsk_set_node_address(const void* context, const uint8_t address);
+void gfsk_set_broadcast_address(const void* context, const uint8_t address);
+void set_cad_params();
+
+
+// Miscellaneous Parameter getters
 sx126x_irq_t get_interrupts(); // for users to know what interrupts have been triggered
 void clear_interrupts();
 uint32_t get_time_on_air();
-sx126x_status_t get_command_status();
+sx126x_status_t get_api_status();
+sx126x_chip_status_t get_chip_status();
 uint8_t get_payload_length();
 uint16_t get_preamble_length();
+sx126x_pkt_type_t get_packet_type();
+uint8_t get_lora_sync_word();
+void get_gfsk_sync_word(uint8_t* sync_word);
 
 // Victor Kalenda Addition End
 
@@ -937,16 +973,6 @@ void sx126x_set_lora_symb_nb_timeout( const void* context, const uint8_t nb_of_s
 //
 // Communication Status Information
 //
-
-/**
-* @brief Get the chip status
-*
-* @param [in] context Chip implementation context
-* @param [out] radio_status Pointer to a structure holding the radio status
-*
-* @returns Void
-*/
-void sx126x_get_status( const void* context, sx126x_chip_status_t* radio_status );
 
 /**
 * @brief Get the current Rx buffer status for both LoRa and GFSK Rx operations

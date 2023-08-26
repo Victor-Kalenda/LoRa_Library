@@ -1,5 +1,5 @@
 /**
- * @file      LoRa_Library.cpp
+ * @file      sx126x.c
  *
  * @brief     SX126x radio driver implementation
  *
@@ -273,6 +273,7 @@ typedef enum sx126x_commands_size_e
     SX126X_SIZE_SET_DIO2_AS_RF_SWITCH_CTRL = 2,
     SX126X_SIZE_SET_DIO3_AS_TCXO_CTRL      = 5,
     // RF Modulation and Packet-Related Functions
+    SX126X_SIZE_SET_GFSK_ADDRESS           = 2, // Victor Kalenda Addition
     SX126X_SIZE_SET_RF_FREQUENCY           = 5,
     SX126X_SIZE_SET_PKT_TYPE               = 2,
     SX126X_SIZE_GET_PKT_TYPE               = 2,
@@ -324,6 +325,73 @@ gfsk_bw_t gfsk_bw[] = {
 
 
 
+
+// Victor Kalenda Addition Start
+
+/**
+ * @brief sx126x bandwidth list
+ * Used to enable Low Data Rate Optimization automatically for a given transmission
+ */
+
+typedef struct
+{
+  double bw;
+  uint8_t param;
+} lora_bw_t;
+
+lora_bw_t lora_bw[] = {
+  { 7, SX126X_LORA_BW_007 }, { 10, SX126X_LORA_BW_010 }, { 15, SX126X_LORA_BW_015 },
+  { 20, SX126X_LORA_BW_020 }, { 31, SX126X_LORA_BW_031 }, { 41, SX126X_LORA_BW_041 },
+  { 62, SX126X_LORA_BW_062 }, { 125, SX126X_LORA_BW_125 }, { 250, SX126X_LORA_BW_250 },
+  { 500, SX126X_LORA_BW_500 },
+};
+
+/**
+ * @brief sx126x Settings Structure
+ * This structure was designed to let users have a wider range of variable naming options.
+ */
+typedef struct sx126x_s
+{
+  const void* reserved;
+  // for identifying the type of chip used (sx1262, sx1261)
+  chip_type_t chip;
+  uint8_t tx_base;
+  uint8_t rx_base;
+  bool reset_params;
+  bool auto_ldro;
+  uint32_t crystal_frequency_error;
+  uint8_t lora_sync_word;
+  uint8_t gfsk_sync_word[8];
+
+  sx126x_irq_mask_t IRQ;
+  sx126x_irq_t interrupts;
+
+  // real-time chip status
+  sx126x_status_t api_status;
+  sx126x_pkt_type_t packet_type;
+  sx126x_chip_status_t chip_status;
+
+
+  // RF Parameters
+  uint32_t frequency;
+  uint32_t transmit_timeout;
+  uint32_t receive_timeout;
+
+  // LoRa Parameters
+  sx126x_mod_params_lora_t lora_modulation_params;
+  sx126x_pkt_params_lora_t lora_packet_params;
+  // Channel Activity Detection Parameters
+  sx126x_cad_params_t lora_cad_params;
+
+  // GFSK Parameters
+  sx126x_mod_params_gfsk_t gfsk_modulation_params;
+  sx126x_pkt_params_gfsk_t gfsk_packet_params;
+
+  // Power
+  sx126x_tx_power_t power;
+
+}sx126x_t;
+
 /*
 * -----------------------------------------------------------------------------
 * -----------------------------------------------------------------------------
@@ -331,55 +399,7 @@ gfsk_bw_t gfsk_bw[] = {
 * --- PRIVATE VARIABLES -------------------------------------------------------
 */
 
-// Victor Kalenda Addition Start
-
-const void* reserved;
-// for identifying the type of chip used (sx1262, sx1261)
-chip_type_t chip;
-uint8_t tx_base = 0x00;
-uint8_t rx_base = 0x00;
-bool reset_params = false;
-bool auto_ldro = false;
-uint32_t crystal_frequency_error;
-uint8_t lora_sync_word = 0x00;
-uint8_t gfsk_sync_word[8];
-
-sx126x_irq_t interrupts;
-
-// API Status
-sx126x_status_t command_status = SX126X_STATUS_OK;
-sx126x_irq_mask_t IRQ;
-
-sx126x_pkt_type_t packet_type;
-
-// RF Parameters
-uint32_t frequency = 915000000;
-uint32_t transmit_timeout = SX126X_MAX_TIMEOUT_IN_MS;
-uint32_t receive_timeout = SX126X_RX_CONTINUOUS;
-
-// LoRa Parameters
-sx126x_mod_params_lora_t lora_modulation_params;
-sx126x_pkt_params_lora_t lora_packet_params;
-
-
-// GFSK Parameters
-sx126x_mod_params_gfsk_t gfsk_modulation_params;
-sx126x_pkt_params_gfsk_t gfsk_packet_params;
-
-// TCXO crystal, a feature of the DRF1262T
-//sx126x_tcxo_ctrl_voltages_t DIO3_voltage = SX126X_TCXO_CTRL_1_7V;
-//sx126x_standby_cfg_t standby_mode = SX126X_STANDBY_CFG_XOSC;
-sx126x_fallback_modes_t fallback_mode = SX126X_FALLBACK_STDBY_XOSC;
-
-// Calibration
-//sx126x_cal_mask_t calibration = SX126X_CAL_ALL;
-
-// Power
-//sx126x_reg_mod_t regulator_mode = SX126X_REG_MODE_DCDC;
-//sx126x_ramp_time_t pa_ramping = SX126X_RAMP_200_US;
-sx126x_pa_cfg_params_t pa_config;
-// dbm in tx_params, the actual output power is defined by pa_config
-uint8_t power = 14;
+sx126x_t sx126x;
 
 /*
 * -----------------------------------------------------------------------------
@@ -390,10 +410,20 @@ uint8_t power = 14;
 
 void set_lora();
 void set_gfsk();
-void set_fhss();
 bool correct_bandwidth(uint32_t raw_br, uint32_t fdev);
+void check_IRQ();
+void check_if_reset_is_required_now();
+
 
 // Victor Kalenda Addition End
+
+
+
+
+
+
+
+
 
 
 //
@@ -831,7 +861,15 @@ void sx126x_cfg_tx_clamp( const void* context );
 */
 void sx126x_stop_rtc( const void* context );
 
-void check_IRQ();
+/**
+* @brief Get the chip status
+*
+* @param [in] context Chip implementation context
+* @param [out] radio_status Pointer to a structure holding the radio status
+*
+* @returns Void
+*/
+void sx126x_get_status( const void* context, sx126x_chip_status_t* radio_status );
 
 
 
@@ -841,7 +879,8 @@ void check_IRQ();
 
 
 
-  
+
+
 
 /*
  * -----------------------------------------------------------------------------
@@ -850,226 +889,281 @@ void check_IRQ();
  * --- PUBLIC FUNCTIONS DEFINITION ---------------------------------------------
  */
 
-
 // Victor Kalenda Addition Start
 
 void initialize_chip(start_params_t setup)
 {
-  chip = setup.chip;
-  sx126x_hal_init(setup.NSS, setup.reset, setup.busy, setup.dio1);
+  // Setup the default settings of the chip
+  sx126x.tx_base = 0x00;
+  sx126x.rx_base = 0x00;
+  sx126x.reset_params = true;
+  sx126x.auto_ldro = false;
+  sx126x.lora_sync_word = 0x14;
+  sx126x.frequency = 915000000;
+  sx126x.transmit_timeout = SX126X_MAX_TIMEOUT_IN_MS;
+  sx126x.receive_timeout = SX126X_RX_SINGLE_MODE;
+  sx126x.lora_modulation_params = {SX126X_LORA_SF7, SX126X_LORA_BW_500, SX126X_LORA_CR_4_8, false}; 
+  sx126x.lora_packet_params = {16, SX126X_LORA_PKT_EXPLICIT, 0, true, false};
+  sx126x.gfsk_modulation_params = {600, 600, SX126X_GFSK_PULSE_SHAPE_OFF, SX126X_GFSK_BW_373600};
+  sx126x.gfsk_packet_params = {32, SX126X_GFSK_PREAMBLE_DETECTOR_OFF, 8, SX126X_GFSK_ADDRESS_FILTERING_DISABLE,
+            SX126X_GFSK_PKT_FIX_LEN, 3, SX126X_GFSK_CRC_OFF, SX126X_GFSK_DC_FREE_OFF};
+
+  // Begin communicating to the chip and defining critical parameters
+  sx126x.chip = setup.chip;
+  sx126x.crystal_frequency_error = setup.crystal_frequency_error;
 
   if(setup.dio1 != -1)
   {
     attachInterrupt(digitalPinToInterrupt(setup.dio1), check_IRQ, RISING);
   }
-  
-  crystal_frequency_error = setup.crystal_frequency_error;
+
+  sx126x_hal_init(setup.NSS, setup.reset, setup.busy, setup.dio1);
   
   // POR Sequence
-  sx126x_hal_reset(reserved);
-  sx126x_wakeup(reserved);
+  sx126x_hal_reset(sx126x.reserved);
+  sx126x_wakeup(sx126x.reserved);
 
   // Refer to section 5.1.3, must be executed in STDBY_RC mode (default at startup)
-  sx126x_set_reg_mode(reserved, setup.regulator);
+  sx126x_set_reg_mode(sx126x.reserved, setup.regulator);
 
   // Set the buffer base address for tx and rx, default is 0x00 for both. If rx is large enough it will overflow tx if tx base address is after rx base address
-  sx126x_set_buffer_base_address(reserved, tx_base, rx_base);
-
-  sx126x_clear_device_errors(reserved);
-
-  // Refer to section 9.2
-  sx126x_cal(reserved, SX126X_CAL_ALL);
-
-  // Refer to section 9.6
-  sx126x_cfg_rx_boosted(reserved, true);
-
-  // Refer to section 15.2
-  sx126x_cfg_tx_clamp(reserved);
-
-  // Set standby, Refer to 13.3.6 
-  sx126x_set_rx_tx_fallback_mode(reserved, SX126X_FALLBACK_STDBY_XOSC);
-  sx126x_set_standby(reserved, SX126X_STANDBY_CFG_XOSC);
+  sx126x_set_buffer_base_address(sx126x.reserved, sx126x.tx_base, sx126x.rx_base);
   
   // Refer to section 13.3.6, only us if TCXO oscillator is used, timeout value dependent on PCB efficiency
   if(setup.crystal == TCXO)
   {
-    sx126x_set_dio3_as_tcxo_ctrl(reserved, SX126X_TCXO_CTRL_1_7V, (uint16_t) 320);
+    sx126x_set_dio3_as_tcxo_ctrl(sx126x.reserved, SX126X_TCXO_CTRL_1_7V, (uint32_t) 320);
   }
 
-  // Refer to section 13.1.14, Pa defaulted to 22 dbm for sx1262 and 14dbm for sx1261
-  set_power(14);
+  // Refer to section 9.2
+  sx126x_cal(sx126x.reserved, SX126X_CAL_ALL);
+  delayMicroseconds(10000);
 
+  // Refer to section 9.6
+  sx126x_cfg_rx_boosted(sx126x.reserved, true);
+
+  // Refer to section 15.2
+  sx126x_cfg_tx_clamp(sx126x.reserved);
+
+  // Set standby, Refer to 13.3.6 
+  sx126x_set_rx_tx_fallback_mode(sx126x.reserved, SX126X_FALLBACK_STDBY_XOSC);
+  sx126x_set_standby(sx126x.reserved, SX126X_STANDBY_CFG_XOSC);
+
+  // Refer to section 13.1.14, Pa defaulted to 22 dbm for sx1262 and 14dbm for sx1261  
   // Refer to section 5.1, OCP defaulted to 140mA for sx1262 and 60mA for sx1261
-
+  set_power(SX126X_TX_14DBM);
+  
   if(setup.dio1 != -1)
   {
     // Refer to section 13.3.2
-    sx126x_set_dio_irq_params(reserved, SX126X_IRQ_ALL, SX126X_IRQ_ALL, SX126X_IRQ_NONE, SX126X_IRQ_NONE);
+    sx126x_set_dio_irq_params(sx126x.reserved, SX126X_IRQ_ALL, SX126X_IRQ_ALL, SX126X_IRQ_NONE, SX126X_IRQ_NONE);
   }
-      
+
   // Refer to section 13.1.5, this is a default setting used for battery concious applications
   // Refer to section 13.4.9, 0x00 will deactivate the timeout to locking the LoRa modem (making this more susceptible to false detections)
-  sx126x_set_lora_symb_nb_timeout(reserved, 0x00);
+  sx126x_set_lora_symb_nb_timeout(sx126x.reserved, 0x00);
 
   // Refer to section 12.1, this will identify your transmissions as part of a private network
-  sx126x_set_lora_sync_word(reserved, 0x14);
+  sx126x_set_lora_sync_word(sx126x.reserved, sx126x.lora_sync_word);
 }
 
 void lora_crc_on(bool crc_is_on)
 {
-  if(lora_packet_params.crc_is_on != crc_is_on)
+  if(sx126x.lora_packet_params.crc_is_on != crc_is_on)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_LORA);
-    lora_packet_params.crc_is_on = crc_is_on;
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_LORA);
+    sx126x.lora_packet_params.crc_is_on = crc_is_on;  
+    check_if_reset_is_required_now();
   }
 }
+
+// Packet parameter setters lora
 void lora_invert_iq(bool invert_iq_is_on)
 {
-  if(lora_packet_params.invert_iq_is_on != invert_iq_is_on)
+  if(sx126x.lora_packet_params.invert_iq_is_on != invert_iq_is_on)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_LORA);
-    lora_packet_params.invert_iq_is_on = invert_iq_is_on;
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_LORA);
+    sx126x.lora_packet_params.invert_iq_is_on = invert_iq_is_on;
+    check_if_reset_is_required_now();
   }
 }
+
 void lora_set_header_type(sx126x_lora_pkt_len_modes_t header_type)
 {
-  if(lora_packet_params.header_type != header_type)
+  if(sx126x.lora_packet_params.header_type != header_type)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_LORA);
-    lora_packet_params.header_type = header_type;
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_LORA);
+    sx126x.lora_packet_params.header_type = header_type;
+    check_if_reset_is_required_now();
   }
 }
+
 void lora_set_pld_len(uint8_t payload_length_in_bytes)
 {
-  if(lora_packet_params.pld_len_in_bytes != payload_length_in_bytes)
+  if(sx126x.lora_packet_params.pld_len_in_bytes != payload_length_in_bytes)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_LORA);
-    lora_packet_params.pld_len_in_bytes = payload_length_in_bytes;
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_LORA);
+    sx126x.lora_packet_params.pld_len_in_bytes = payload_length_in_bytes;
+    check_if_reset_is_required_now();
   }
 }
+
 bool lora_set_pre_len(uint16_t preamble_length_in_symbols)
 {
   // Refer to section 6.1.3
-  if(preamble_length_in_symbols > 10 && preamble_length_in_symbols < 65535)
+  if(preamble_length_in_symbols >= 10 && preamble_length_in_symbols <= 65535)
   {
-    if(lora_packet_params.preamble_len_in_symb != preamble_length_in_symbols)
+    if(sx126x.lora_packet_params.preamble_len_in_symb != preamble_length_in_symbols)
     {
-      reset_params = (packet_type == SX126X_PKT_TYPE_LORA);
-      lora_packet_params.preamble_len_in_symb = preamble_length_in_symbols;
+      sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_LORA);
+      sx126x.lora_packet_params.preamble_len_in_symb = preamble_length_in_symbols;
+      check_if_reset_is_required_now();
     }
     return true;
   }
   return false;
 }
-// modulation parameter setters lora
+
+// Modulation parameter setters lora
 void lora_set_sf(sx126x_lora_sf_t spreadfactor)
 {
   // Refer to section 6.1.1.1
-  if(lora_modulation_params.sf != spreadfactor)
+  if(sx126x.lora_modulation_params.sf != spreadfactor)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_LORA);
-    lora_modulation_params.sf = spreadfactor;
-    if((spreadfactor == SX126X_LORA_SF5 || spreadfactor == SX126X_LORA_SF6) && lora_packet_params.preamble_len_in_symb < 12)
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_LORA);
+    sx126x.lora_modulation_params.sf = spreadfactor;
+    if((spreadfactor == SX126X_LORA_SF5 || spreadfactor == SX126X_LORA_SF6) && sx126x.lora_packet_params.preamble_len_in_symb < 12)
     {
-      lora_packet_params.preamble_len_in_symb = 12;
+      sx126x.lora_packet_params.preamble_len_in_symb = 12;
     }
+    check_if_reset_is_required_now();
   }
-}
-void lora_set_bw(sx126x_lora_bw_t bandwidth)
-{
-  if(lora_modulation_params.bw != bandwidth)
-  {
-    reset_params = (packet_type == SX126X_PKT_TYPE_LORA);
-    lora_modulation_params.bw = bandwidth;
-  }
-}
-void lora_set_cr(sx126x_lora_cr_t coderate)
-{
-  if(lora_modulation_params.cr != coderate)
-  {
-    reset_params = (packet_type == SX126X_PKT_TYPE_LORA);
-    lora_modulation_params.cr = coderate;
-  }
-}
-void lora_set_ldro(bool ldro_is_on)
-{
-  if(lora_modulation_params.ldro != ldro_is_on)
-  {
-    reset_params = (packet_type == SX126X_PKT_TYPE_LORA);
-    lora_modulation_params.ldro = ldro_is_on;
-  }
-}
-void lora_set_auto_ldro(bool auto_ldro_is_on)
-{
-  auto_ldro = auto_ldro_is_on;
-  // instantly check if ldro should be activated
-  // figure out a way to calculate the symbol time
 }
 
-// packet parameter setters gfsk (sync word length in bits handled in sx126x_set_gfsk_sync_word())
+void lora_set_bw(sx126x_lora_bw_t bandwidth)
+{
+  if(sx126x.lora_modulation_params.bw != bandwidth)
+  {
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_LORA);
+    sx126x.lora_modulation_params.bw = bandwidth;
+    check_if_reset_is_required_now();
+  }
+}
+
+void lora_set_cr(sx126x_lora_cr_t coderate)
+{
+  if(sx126x.lora_modulation_params.cr != coderate)
+  {
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_LORA);
+    sx126x.lora_modulation_params.cr = coderate;
+    check_if_reset_is_required_now();
+  }
+}
+
+void lora_set_ldro(bool ldro_is_on)
+{
+  if(sx126x.lora_modulation_params.ldro != ldro_is_on)
+  {
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_LORA);
+    sx126x.lora_modulation_params.ldro = ldro_is_on;
+    check_if_reset_is_required_now();
+  }
+}
+
+void lora_set_auto_ldro(bool auto_ldro_is_on)
+{
+  sx126x.auto_ldro = auto_ldro_is_on;
+  // instantly check if ldro should be activated
+  // figure out a way to calculate the symbol time
+  // Loranet lorawan spec handles ldro in sx126x implementation (RadioSetTxConfig())
+}
+
+
+
+// Packet parameter setters gfsk (sync word length in bits handled in sx126x_set_gfsk_sync_word())
 bool gfsk_set_pre_len(uint16_t preamble_len_in_bits)
 {
   // Refer to section 6.2.3.1
-  if(preamble_len_in_bits > 8 && preamble_len_in_bits < 65535)
+  if(preamble_len_in_bits >= 8 && preamble_len_in_bits <= 65535)
   {
-    if(gfsk_packet_params.preamble_len_in_bits != preamble_len_in_bits)
+    if(sx126x.gfsk_packet_params.preamble_len_in_bits != preamble_len_in_bits)
     {
-      reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-      gfsk_packet_params.preamble_len_in_bits = preamble_len_in_bits;
+      sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+      sx126x.gfsk_packet_params.preamble_len_in_bits = preamble_len_in_bits;
+      check_if_reset_is_required_now();
     }
     return true;
   }
   return false;
 }
+
 void gfsk_set_pre_detector(sx126x_gfsk_preamble_detector_t preamble_detection_length)
 {
-  if(gfsk_packet_params.preamble_detector != preamble_detection_length)
+  if(sx126x.gfsk_packet_params.preamble_detector != preamble_detection_length)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-    gfsk_packet_params.preamble_detector = preamble_detection_length;
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+    sx126x.gfsk_packet_params.preamble_detector = preamble_detection_length;
+    check_if_reset_is_required_now();
   }
 }
+
 void gfsk_addr_filter(sx126x_gfsk_address_filtering_t address_filtering)
 {
-  if(gfsk_packet_params.address_filtering != address_filtering)
+  if(sx126x.gfsk_packet_params.address_filtering != address_filtering)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-    gfsk_packet_params.address_filtering = address_filtering;
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+    sx126x.gfsk_packet_params.address_filtering = address_filtering;
+    check_if_reset_is_required_now();
   }
 }
+
 void gfsk_set_header_type(sx126x_gfsk_pkt_len_modes_t header_type)
 {
-  if(gfsk_packet_params.header_type != header_type)
+  if(sx126x.gfsk_packet_params.header_type != header_type)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-    gfsk_packet_params.header_type = header_type;
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+    sx126x.gfsk_packet_params.header_type = header_type;
+    check_if_reset_is_required_now();
   }
 }
-void gfsk_set_pld_len(uint8_t pld_len_in_bytes)
+
+bool gfsk_set_pld_len(uint8_t pld_len_in_bytes)
 {
-  if(gfsk_packet_params.pld_len_in_bytes != pld_len_in_bytes)
+  if(sx126x.gfsk_packet_params.pld_len_in_bytes != pld_len_in_bytes)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-    gfsk_packet_params.pld_len_in_bytes = pld_len_in_bytes;
+    // Refer to section 6.2.3.1 and 6.2.3.2
+    if(sx126x.gfsk_packet_params.address_filtering != SX126X_GFSK_ADDRESS_FILTERING_DISABLE && pld_len_in_bytes < 254)
+    {
+      sx126x.gfsk_packet_params.pld_len_in_bytes = 254;
+      return false;
+    }
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+    sx126x.gfsk_packet_params.pld_len_in_bytes = pld_len_in_bytes;
+    check_if_reset_is_required_now();
   }
 }
+
 void gfsk_crc(sx126x_gfsk_crc_types_t crc_type)
 {
-  if(gfsk_packet_params.crc_type != crc_type)
+  if(sx126x.gfsk_packet_params.crc_type != crc_type)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-    gfsk_packet_params.crc_type = crc_type;
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+    sx126x.gfsk_packet_params.crc_type = crc_type;
+    check_if_reset_is_required_now();
   }
 }
+
 void gfsk_whitening_on(sx126x_gfsk_dc_free_t dc_free)
 {
-  if(gfsk_packet_params.dc_free != dc_free)
+  if(sx126x.gfsk_packet_params.dc_free != dc_free)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-    gfsk_packet_params.dc_free = dc_free;
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+    sx126x.gfsk_packet_params.dc_free = dc_free;
+    check_if_reset_is_required_now();
   }
 }
-// modulation parameter setters gfsk
+
+// Modulation parameter setters gfsk
 bool gfsk_set_br(uint32_t br_in_bps) // between 600 - 300000 bps
 {
   // Refer to section 6.2.1
@@ -1077,21 +1171,22 @@ bool gfsk_set_br(uint32_t br_in_bps) // between 600 - 300000 bps
   {
     // get the bitrate and frequency deviation the chip is set to
     const uint32_t raw_br = ( uint32_t )( 32 * SX126X_XTAL_FREQ / br_in_bps);
-    const uint32_t fdev = sx126x_convert_freq_in_hz_to_pll_step(gfsk_modulation_params.fdev_in_hz);
+    const uint32_t fdev = sx126x_convert_freq_in_hz_to_pll_step(sx126x.gfsk_modulation_params.fdev_in_hz);
     // find the current bandwidth the chip is set to
     uint32_t bandwidth = 0;
     for( uint8_t i = 0; i < ( sizeof( gfsk_bw ) / sizeof( gfsk_bw_t ) ); i++ )
     {
-        if( gfsk_modulation_params.bw_dsb_param == gfsk_bw[i].param )
+        if( sx126x.gfsk_modulation_params.bw_dsb_param == gfsk_bw[i].param )
         {
             bandwidth = gfsk_bw[i].bw;
             break;
         }
     }    
-    if((raw_br + (2 * fdev) + (2 * crystal_frequency_error)) < bandwidth)
+    if((raw_br + (2 * fdev) + (2 * sx126x.crystal_frequency_error)) <= bandwidth)
     {
-      reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-      gfsk_modulation_params.br_in_bps = br_in_bps;
+      sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+      sx126x.gfsk_modulation_params.br_in_bps = br_in_bps;
+      check_if_reset_is_required_now();
       return true;
     }
     else
@@ -1099,15 +1194,17 @@ bool gfsk_set_br(uint32_t br_in_bps) // between 600 - 300000 bps
       Serial.println(F("Bandwidth Incompatible with BitRate"));
       if(correct_bandwidth(raw_br, fdev))
       {
-        Serial.print(F("Bandwidth Corrected"));
-        reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-        gfsk_modulation_params.br_in_bps = br_in_bps;
+        Serial.println(F("Bandwidth Corrected"));
+        sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+        sx126x.gfsk_modulation_params.br_in_bps = br_in_bps;
+        check_if_reset_is_required_now();
         return true;
       }
     }
   }
   return false;
 }
+
 // There is a mathematical contridiction on section 6.2.1 and section 13.4.5.1. This code was based on section 6.2.1
 bool gfsk_set_fdev(uint32_t fdev_in_hz) // between 600 - 200000 hz
 {
@@ -1115,22 +1212,23 @@ bool gfsk_set_fdev(uint32_t fdev_in_hz) // between 600 - 200000 hz
   if(fdev_in_hz > 600 && fdev_in_hz < 200000)
   {
     // get the current bitrate and frequency deviation the chip is set to
-    const uint32_t raw_br = ( uint32_t )( 32 * SX126X_XTAL_FREQ / gfsk_modulation_params.br_in_bps);
+    const uint32_t raw_br = ( uint32_t )( 32 * SX126X_XTAL_FREQ / sx126x.gfsk_modulation_params.br_in_bps);
     const uint32_t fdev = sx126x_convert_freq_in_hz_to_pll_step(fdev_in_hz);
     // find the current bandwidth the chip is set to
     uint32_t bandwidth = 0;
     for( uint8_t i = 0; i < ( sizeof( gfsk_bw ) / sizeof( gfsk_bw_t ) ); i++ )
     {
-        if( gfsk_modulation_params.bw_dsb_param == gfsk_bw[i].param )
+        if( sx126x.gfsk_modulation_params.bw_dsb_param == gfsk_bw[i].param )
         {
             bandwidth = gfsk_bw[i].bw;
             break;
         }
     } 
-    if((raw_br + (2 * fdev) + (2 * crystal_frequency_error)) < bandwidth)
+    if((raw_br + (2 * fdev) + (2 * sx126x.crystal_frequency_error)) <= bandwidth)
     {
-      reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-      gfsk_modulation_params.fdev_in_hz = fdev_in_hz;
+      sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+      sx126x.gfsk_modulation_params.fdev_in_hz = fdev_in_hz;
+      check_if_reset_is_required_now();
       return true;
     }
     else
@@ -1138,31 +1236,35 @@ bool gfsk_set_fdev(uint32_t fdev_in_hz) // between 600 - 200000 hz
       Serial.println(F("Bandwidth Incompatible with Frequency Deviation"));
       if(correct_bandwidth(raw_br, fdev))
       {
-        Serial.print(F("Bandwidth Corrected"));
-        reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-        gfsk_modulation_params.fdev_in_hz = fdev_in_hz;
+        Serial.println(F("Bandwidth Corrected"));
+        sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+        sx126x.gfsk_modulation_params.fdev_in_hz = fdev_in_hz;
+        check_if_reset_is_required_now();
         return true;
       }
     }
   }
   return false;
 }
+
 void gfsk_set_ps(sx126x_gfsk_pulse_shape_t pulse_shape)
 {
-  if(gfsk_modulation_params.pulse_shape != pulse_shape)
+  if(sx126x.gfsk_modulation_params.pulse_shape != pulse_shape)
   {
-    reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-    gfsk_modulation_params.pulse_shape = pulse_shape;
+    sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+    sx126x.gfsk_modulation_params.pulse_shape = pulse_shape;
+    check_if_reset_is_required_now();
   }
 }
+
 bool gfsk_set_bw(sx126x_gfsk_bw_t bw_dsb_param)
 {
   // Refer to section 6.2.1
-  if(gfsk_modulation_params.bw_dsb_param != bw_dsb_param)
+  if(sx126x.gfsk_modulation_params.bw_dsb_param != bw_dsb_param)
   {
     // get the current bitrate and frequency deviation the chip is set to
-    const uint32_t raw_br = ( uint32_t )( 32 * SX126X_XTAL_FREQ / gfsk_modulation_params.br_in_bps);
-    const uint32_t fdev = sx126x_convert_freq_in_hz_to_pll_step(gfsk_modulation_params.fdev_in_hz);
+    const uint32_t raw_br = ( uint32_t )( 32 * SX126X_XTAL_FREQ / sx126x.gfsk_modulation_params.br_in_bps);
+    const uint32_t fdev = sx126x_convert_freq_in_hz_to_pll_step(sx126x.gfsk_modulation_params.fdev_in_hz);
     // find the current bandwidth the chip is set to
     uint32_t bandwidth = 0;
     for( uint8_t i = 0; i < ( sizeof( gfsk_bw ) / sizeof( gfsk_bw_t ) ); i++ )
@@ -1173,10 +1275,11 @@ bool gfsk_set_bw(sx126x_gfsk_bw_t bw_dsb_param)
             break;
         }
     } 
-    if((raw_br + (2 * fdev) + (2 * crystal_frequency_error)) < bandwidth)
+    if((raw_br + (2 * fdev) + (2 * sx126x.crystal_frequency_error)) <= bandwidth)
     {
-      reset_params = (packet_type == SX126X_PKT_TYPE_GFSK);
-      gfsk_modulation_params.bw_dsb_param = bw_dsb_param;
+      sx126x.reset_params = (sx126x.packet_type == SX126X_PKT_TYPE_GFSK);
+      sx126x.gfsk_modulation_params.bw_dsb_param = bw_dsb_param;
+      check_if_reset_is_required_now();
       return true;
     }
     else
@@ -1188,14 +1291,10 @@ bool gfsk_set_bw(sx126x_gfsk_bw_t bw_dsb_param)
   return true;
 }
 
-void default_fhss_setup()
+// Modulation type setters
+void set_packet_type(sx126x_pkt_type_t type)
 {
-  Serial.println(F("Not Implemented"));
-}
-
-void set_packet_type(sx126x_pkt_type_t type) // 3 types of packets, lora, gfsk, fhss, function used to switch chip between modulation types during runtime
-{
-  packet_type = type;
+  sx126x.packet_type = type;
   switch(type)
   {
     case SX126X_PKT_TYPE_GFSK:
@@ -1208,183 +1307,196 @@ void set_packet_type(sx126x_pkt_type_t type) // 3 types of packets, lora, gfsk, 
       set_lora();
       break;
     }
-    case SX126X_PKT_TYPE_LR_FHSS:
-    {
-      set_fhss();
-      break;
-    }
     default:
     {
       Serial.println(F("Invalid Type"));
     }
   }
 }
-// make timeout a parameter which users can set.
+
+// Transmit and Receive actuation functions
 void transmit(uint8_t *buffer)
 {
   // write what you want to transmit to the chip
-  if(packet_type == SX126X_PKT_TYPE_LORA)
+
+  if(sx126x.packet_type == SX126X_PKT_TYPE_LORA)
   {
-    sx126x_write_buffer(reserved, tx_base, buffer, lora_packet_params.pld_len_in_bytes);
+    sx126x_write_buffer(sx126x.reserved, sx126x.tx_base, buffer, sx126x.lora_packet_params.pld_len_in_bytes);
   }
   else
   {
-    sx126x_write_buffer(reserved, tx_base, buffer, gfsk_packet_params.pld_len_in_bytes);
+    sx126x_write_buffer(sx126x.reserved, sx126x.tx_base, buffer, sx126x.gfsk_packet_params.pld_len_in_bytes);
   }
 
   // Refer to section 13.4.1, Refer to 5.1 for why it must be configured before every reception and transmission
-  sx126x_set_rf_freq(reserved, frequency);
+  sx126x_set_rf_freq(sx126x.reserved, sx126x.frequency);
 
   // run set_packet after any change in packet or modulation params
-  if(reset_params)
+  if(sx126x.reset_params)
   {
-    set_packet_type(packet_type);
-    reset_params = false;
+    set_packet_type(sx126x.packet_type);
+    sx126x.reset_params = false;
   }
 
-  sx126x_set_tx(reserved, transmit_timeout);
+  sx126x_set_tx(sx126x.reserved, sx126x.transmit_timeout);
 }
 
 void receive_mode()
 {
   // Refer to section 13.4.1, Refer to 5.1 for why it must be configured before every reception and transmission
-  sx126x_set_rf_freq(reserved, frequency);
+  sx126x_set_rf_freq(sx126x.reserved, sx126x.frequency);
 
   // run set_packet after any change in packet or modulation params
-  if(reset_params)
+  if(sx126x.reset_params)
   {
-    set_packet_type(packet_type);
-    reset_params = false;
+    set_packet_type(sx126x.packet_type);
+    sx126x.reset_params = false;
   }
-  //set_packet(context);
 
-  sx126x_set_rx(reserved, receive_timeout);
+  sx126x_set_rx(sx126x.reserved, sx126x.receive_timeout);
+}
+
+void receive_mode_duty_cycle(uint32_t rx_time, uint32_t sleep_time)
+{
+  // Refer to section 13.4.1, Refer to 5.1 for why it must be configured before every reception and transmission
+  sx126x_set_rf_freq(sx126x.reserved, sx126x.frequency);
+
+  // run set_packet after any change in packet or modulation params
+  if(sx126x.reset_params)
+  {
+    set_packet_type(sx126x.packet_type);
+    sx126x.reset_params = false;
+  }
+
+  sx126x_set_rx_duty_cycle(sx126x.reserved, rx_time, sleep_time);
 }
 
 void read_transmit_buffer(uint8_t* buffer)
 {
-  if(packet_type == SX126X_PKT_TYPE_LORA)
+  if(sx126x.packet_type == SX126X_PKT_TYPE_LORA)
   {
-    sx126x_read_buffer( reserved, tx_base, buffer, lora_packet_params.pld_len_in_bytes);
+    sx126x_read_buffer( sx126x.reserved, sx126x.tx_base, buffer, sx126x.lora_packet_params.pld_len_in_bytes);
   }
   else
   {
-    sx126x_read_buffer( reserved, tx_base, buffer, gfsk_packet_params.pld_len_in_bytes);
+    sx126x_read_buffer( sx126x.reserved, sx126x.tx_base, buffer, sx126x.gfsk_packet_params.pld_len_in_bytes);
   }
 }
 
-void set_transmit_timeout(uint32_t timeout_in_ms) // 262 143 ms is the max timeout, used for receive function
+void set_transmit_timeout(uint32_t timeout_in_ms) // 262 142 ms is the max timeout, used for receive function
 {
   if(timeout_in_ms < SX126X_MAX_TIMEOUT_IN_MS)
   {
-    transmit_timeout = timeout_in_ms;
+    sx126x.transmit_timeout = timeout_in_ms;
   }
   else
   {
-    Serial.print(F("Invalid timeout"));
-    transmit_timeout = 0;
+    Serial.println(F("Invalid timeout"));
+    sx126x.transmit_timeout = 0;
   }
 }
 
 void set_transmit_buffer_address(uint8_t address)
 {
-  tx_base = address;
-  command_status = sx126x_set_buffer_base_address(reserved, tx_base, rx_base);
+  sx126x.tx_base = address;
+  sx126x.api_status = sx126x_set_buffer_base_address(sx126x.reserved, sx126x.tx_base, sx126x.rx_base);
 }
 
 void read_receive_buffer(uint8_t* buffer)
 {
-  if(packet_type == SX126X_PKT_TYPE_LORA)
+  if(sx126x.packet_type == SX126X_PKT_TYPE_LORA)
   {
-    sx126x_read_buffer(reserved, rx_base, buffer, lora_packet_params.pld_len_in_bytes);
+    sx126x_read_buffer(sx126x.reserved, sx126x.rx_base, buffer, sx126x.lora_packet_params.pld_len_in_bytes);
   }
   else
   {
-    sx126x_read_buffer(reserved, rx_base, buffer, gfsk_packet_params.pld_len_in_bytes);
+    sx126x_read_buffer(sx126x.reserved, sx126x.rx_base, buffer, sx126x.gfsk_packet_params.pld_len_in_bytes);
   }
 }
 
 void set_receive_timeout(uint32_t timeout_in_ms) // 262 143 ms is the max timeout, used for receive function
 {
-  if(timeout_in_ms < SX126X_MAX_TIMEOUT_IN_MS)
+  if(timeout_in_ms < SX126X_MAX_TIMEOUT_IN_MS || timeout_in_ms == SX126X_RX_CONTINUOUS)
   {
-    receive_timeout = timeout_in_ms;
+    sx126x.receive_timeout = timeout_in_ms;
   }
   else
   {
-    Serial.print(F("Invalid timeout"));
-    receive_timeout = 0;
+    Serial.println(F("Invalid timeout"));
+    sx126x.receive_timeout = 0;
   }
 }
 
 void set_receive_buffer_address(uint8_t address)
 {
-  rx_base = address;
-  command_status = sx126x_set_buffer_base_address(reserved, tx_base, rx_base);
+  sx126x.rx_base = address;
+  sx126x.api_status = sx126x_set_buffer_base_address(sx126x.reserved, sx126x.tx_base, sx126x.rx_base);
 }
 
-// range of values 10, 14, 15, 17, 20, 22
-// If the OCP value is important to you, you must reset_params it to your desired value
-void set_power(uint8_t power_in_dbm) // used in init function for default 14dbm. Pa_config handled according to datasheet
+// Miscellaneous Parameter setters
+
+// If the OCP value is important to you, you must call sx126x_set_ocp_value() and reset it to your desired value
+void set_power(sx126x_tx_power_t power_in_dbm) // used in init function for default 14dbm. Pa_config handled according to datasheet
 {
   // Refer to section 13.1.14
-  if(power != power_in_dbm)
+  if(sx126x.power != power_in_dbm)
   {      
-    power = power_in_dbm;
-    if(chip == SX1262)
+    sx126x_pa_cfg_params_t pa_config;
+    sx126x.power = power_in_dbm;
+    if(sx126x.chip == SX1262)
     {
-      switch(power)
+      switch(sx126x.power)
       {
-        case 14:
+        case SX126X_TX_14DBM:
         {
           pa_config.pa_duty_cycle = 0x02; // Never set higher than 0x04
           pa_config.hp_max = 0x02; // 0x00 - 0x07, Higher settings will accelerate chip aging
 
           // OCP set to 140mA by default, Refer to section 5.1
           pa_config.device_sel = 0x00; // SX1262 = 0x00, SX1261 = 0x01
-          pa_config.pa_lut = 0x01; // reserved
-          sx126x_set_pa_cfg(reserved, &pa_config);
+          pa_config.pa_lut = 0x01; // sx126x.reserved
+          sx126x_set_pa_cfg(sx126x.reserved, &pa_config);
           // Refer to section 13.4.4
-          sx126x_set_tx_params(reserved, 22, SX126X_RAMP_200_US);
+          sx126x_set_tx_params(sx126x.reserved, 22, SX126X_RAMP_200_US);
           break;
         }
-        case 17:
+        case SX126X_TX_17DBM:
         {
           pa_config.pa_duty_cycle = 0x02; // Never set higher than 0x04
           pa_config.hp_max = 0x03; // 0x00 - 0x07, Higher settings will accelerate chip aging
 
           // OCP set to 140mA by default, Refer to section 5.1
           pa_config.device_sel = 0x00; // SX1262 = 0x00, SX1261 = 0x01 
-          pa_config.pa_lut = 0x01; // reserved
-          sx126x_set_pa_cfg(reserved, &pa_config);
+          pa_config.pa_lut = 0x01; // sx126x.reserved
+          sx126x_set_pa_cfg(sx126x.reserved, &pa_config);
           // Refer to section 13.4.4
-          sx126x_set_tx_params(reserved, 22, SX126X_RAMP_200_US);
+          sx126x_set_tx_params(sx126x.reserved, 22, SX126X_RAMP_200_US);
           break;
         }
-        case 20:
+        case SX126X_TX_20DBM:
         {
           pa_config.pa_duty_cycle = 0x03; // Never set higher than 0x04
           pa_config.hp_max = 0x05; // 0x00 - 0x07, Higher settings will accelerate chip aging
 
           // OCP set to 140mA by default, Refer to section 5.1
           pa_config.device_sel = 0x00; // SX1262 = 0x00, SX1261 = 0x01
-          pa_config.pa_lut = 0x01; // reserved
-          sx126x_set_pa_cfg(reserved, &pa_config);
+          pa_config.pa_lut = 0x01; // sx126x.reserved
+          sx126x_set_pa_cfg(sx126x.reserved, &pa_config);
           // Refer to section 13.4.4
-          sx126x_set_tx_params(reserved, 22, SX126X_RAMP_200_US);
+          sx126x_set_tx_params(sx126x.reserved, 22, SX126X_RAMP_200_US);
           break;
         }
-        case 22:
+        case SX126X_TX_22DBM:
         {
           pa_config.pa_duty_cycle = 0x04; // Never set higher than 0x04
           pa_config.hp_max = 0x07; // 0x00 - 0x07, Higher settings will accelerate chip aging
 
           // OCP set to 140mA by default, Refer to section 5.1
           pa_config.device_sel = 0x00; // SX1262 = 0x00, SX1261 = 0x01
-          pa_config.pa_lut = 0x01; // reserved
-          sx126x_set_pa_cfg(reserved, &pa_config);
+          pa_config.pa_lut = 0x01; // sx126x.reserved
+          sx126x_set_pa_cfg(sx126x.reserved, &pa_config);
           // Refer to section 13.4.4
-          sx126x_set_tx_params(reserved, 22, SX126X_RAMP_200_US);
+          sx126x_set_tx_params(sx126x.reserved, 22, SX126X_RAMP_200_US);
           break;
         }
         default:
@@ -1395,38 +1507,38 @@ void set_power(uint8_t power_in_dbm) // used in init function for default 14dbm.
     }
     else
     {
-      switch(power)
+      switch(sx126x.power)
       {
-        case 10:
+        case SX126X_TX_10DBM:
         {
           pa_config.pa_duty_cycle = 0x01; // Never set higher than 0x04
           pa_config.hp_max = 0x00; // 0x00 - 0x07, Higher settings will accelerate chip aging
 
           // OCP set to 60mA by default, Refer to section 5.1
           pa_config.device_sel = 0x01; // SX1262 = 0x00, SX1261 = 0x01
-          pa_config.pa_lut = 0x01; // reserved
-          sx126x_set_pa_cfg(reserved, &pa_config);
+          pa_config.pa_lut = 0x01; // sx126x.reserved
+          sx126x_set_pa_cfg(sx126x.reserved, &pa_config);
           // Refer to section 13.4.4
-          sx126x_set_tx_params(reserved, 13, SX126X_RAMP_200_US);
+          sx126x_set_tx_params(sx126x.reserved, 13, SX126X_RAMP_200_US);
           break;
         }
-        case 14:
+        case SX126X_TX_14DBM:
         {
           pa_config.pa_duty_cycle = 0x04; // Never set higher than 0x04
           pa_config.hp_max = 0x00; // 0x00 - 0x07, Higher settings will accelerate chip aging
 
           // OCP set to 60mA by default, Refer to section 5.1
           pa_config.device_sel = 0x01; // SX1262 = 0x00, SX1261 = 0x01
-          pa_config.pa_lut = 0x01; // reserved
-          sx126x_set_pa_cfg(reserved, &pa_config);
+          pa_config.pa_lut = 0x01; // sx126x.reserved
+          sx126x_set_pa_cfg(sx126x.reserved, &pa_config);
           // Refer to section 13.4.4
-          sx126x_set_tx_params(reserved, 14, SX126X_RAMP_200_US);
+          sx126x_set_tx_params(sx126x.reserved, 14, SX126X_RAMP_200_US);
           break;
         }
-        case 15:
+        case SX126X_TX_15DBM:
         {
           // Refer to section 13.1.14.1
-          if(frequency < 400000000)
+          if(sx126x.frequency < 400000000)
           {
             Serial.println(F("Power cannot be set above 14dbm when frequency synthesis is less than 400 Mhz "));
             break;
@@ -1436,10 +1548,10 @@ void set_power(uint8_t power_in_dbm) // used in init function for default 14dbm.
 
           // OCP set to 60mA by default, Refer to section 5.1
           pa_config.device_sel = 0x01; // SX1262 = 0x00, SX1261 = 0x01
-          pa_config.pa_lut = 0x01; // reserved
-          sx126x_set_pa_cfg(reserved, &pa_config);
+          pa_config.pa_lut = 0x01; // sx126x.reserved
+          sx126x_set_pa_cfg(sx126x.reserved, &pa_config);
           // Refer to section 13.4.4  
-          sx126x_set_tx_params(reserved, 14, SX126X_RAMP_200_US);
+          sx126x_set_tx_params(sx126x.reserved, 14, SX126X_RAMP_200_US);
           break;
         }
         default:
@@ -1453,142 +1565,217 @@ void set_power(uint8_t power_in_dbm) // used in init function for default 14dbm.
 
 void set_frequency(uint32_t frequency_in_hz)
 {
-  frequency = frequency_in_hz;
+  sx126x.frequency = frequency_in_hz;
+  sx126x_set_rf_freq(sx126x.reserved, sx126x.frequency);
 }
 
-// variable getters
+void gfsk_set_node_address(const void* context, const uint8_t address)
+{
+  sx126x.api_status = ( sx126x_status_t ) sx126x_write_register( context, SX126X_REG_NODE_ADDRESS, &address, 1 );
+}
+
+void gfsk_set_broadcast_address(const void* context, const uint8_t address)
+{
+  sx126x.api_status = ( sx126x_status_t ) sx126x_write_register( context, SX126X_REG_BROADCAST_ADDRESS, &address, 1 );
+}
+
+// Refer to AN1200.48 application note. These settings only apply for bandwidths 500, 125 khz, and spreadfactors 7 to 12
+void set_cad_params()
+{
+  switch(sx126x.lora_modulation_params.bw)
+  {
+    case SX126X_LORA_BW_500:
+    {          
+      sx126x.lora_cad_params.cad_detect_min = 10;
+      switch(sx126x.lora_modulation_params.sf)
+      {
+        case SX126X_LORA_SF7:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 21;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          break;
+        }
+        case SX126X_LORA_SF8:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 22;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          break;
+        }
+        case SX126X_LORA_SF9:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 22;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          break;
+        }
+        case SX126X_LORA_SF10:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 23;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          break;
+        }
+        case SX126X_LORA_SF11:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 25;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          break;
+        }
+        case SX126X_LORA_SF12:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 29;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_08_SYMB;
+          break;
+        }
+      }
+      sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
+      break;
+    }
+    case SX126X_LORA_BW_125:
+    {
+      sx126x.lora_cad_params.cad_detect_min = 10; 
+      switch(sx126x.lora_modulation_params.sf)
+      {
+        case SX126X_LORA_SF7:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 22;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_02_SYMB;
+          break;
+        }
+        case SX126X_LORA_SF8:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 22;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_02_SYMB;
+          break;
+        }
+        case SX126X_LORA_SF9:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 23;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          break;
+        }
+        case SX126X_LORA_SF10:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 24;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          break;
+        }
+        case SX126X_LORA_SF11:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 25;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          break;
+        }
+        case SX126X_LORA_SF12:
+        {
+          sx126x.lora_cad_params.cad_detect_peak = 28;
+          sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          break;
+        }
+      }
+      sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
+      break;
+    }
+    default:
+    {
+      Serial.println(F("Bandwidth not supported"));
+    }
+  }
+} 
+
+
+
+// Miscellaneous Parameter getters
+
 sx126x_irq_t get_interrupts() // for users to know what interrupts have been triggered
 {
-  return interrupts;
+  return sx126x.interrupts;
 }
+
 void clear_interrupts()
 {
-  interrupts.tx_done = false;
-  interrupts.rx_done = false;
-  interrupts.preamble_detected = false;
-  interrupts.sync_word_valid = false;
-  interrupts.header_valid = false;
-  interrupts.header_error = false;
-  interrupts.crc_error = false;
-  interrupts.cad_done = false;
-  interrupts.cad_detected = false;
-  interrupts.timeout = false;
-  interrupts.lr_fhss_hop = false;
+  sx126x.interrupts.tx_done = false;
+  sx126x.interrupts.rx_done = false;
+  sx126x.interrupts.preamble_detected = false;
+  sx126x.interrupts.sync_word_valid = false;
+  sx126x.interrupts.header_valid = false;
+  sx126x.interrupts.header_error = false;
+  sx126x.interrupts.crc_error = false;
+  sx126x.interrupts.cad_done = false;
+  sx126x.interrupts.cad_detected = false;
+  sx126x.interrupts.timeout = false;
+  sx126x.interrupts.lr_fhss_hop = false;
 }
+
 uint32_t get_time_on_air()
 {
-  switch(packet_type)
+  switch(sx126x.packet_type)
   {
     case SX126X_PKT_TYPE_GFSK:
     {
-      return sx126x_get_gfsk_time_on_air_in_ms(&gfsk_packet_params, &gfsk_modulation_params);
+      return sx126x_get_gfsk_time_on_air_in_ms(&sx126x.gfsk_packet_params, &sx126x.gfsk_modulation_params);
     }
     case SX126X_PKT_TYPE_LORA:
     {
-      return sx126x_get_lora_time_on_air_in_ms(&lora_packet_params, &lora_modulation_params);
-    }
-    case SX126X_PKT_TYPE_LR_FHSS:
-    {
-      Serial.println(F("Not Supported"));
+      return sx126x_get_lora_time_on_air_in_ms(&sx126x.lora_packet_params, &sx126x.lora_modulation_params);
     }
   }
   return 0;
 }
-void check_IRQ()
+
+sx126x_status_t get_api_status()
 {
-  sx126x_get_and_clear_irq_status(reserved, &IRQ);
-  Serial.print(F("IRQ Status = "));
-  Serial.println(IRQ, BIN);
-  if(IRQ & SX126X_IRQ_NONE)
-  {
-    Serial.println(F("No IRQ"));
-    return;
-  }
-  if(IRQ & SX126X_IRQ_TX_DONE)
-  {
-    Serial.println(F("TX Done"));
-    interrupts.tx_done = true;
-  }
-  if(IRQ & SX126X_IRQ_RX_DONE)
-  {
-    Serial.println(F("RX Done"));
-    interrupts.rx_done = true;
-  }
-  if(IRQ & SX126X_IRQ_PREAMBLE_DETECTED)
-  {
-    Serial.println(F("Preamble Detected"));
-    interrupts.preamble_detected = true;
-  }
-  if(IRQ & SX126X_IRQ_SYNC_WORD_VALID)
-  {
-    Serial.println(F("Sync Word Valid"));
-    interrupts.sync_word_valid = true;
-  }
-  if(IRQ & SX126X_IRQ_HEADER_VALID)
-  {
-    Serial.println(F("Header Valid"));
-    interrupts.header_valid = true;
-  }
-  if(IRQ & SX126X_IRQ_HEADER_ERROR)
-  {
-    Serial.println(F("Header Error"));
-    interrupts.header_error = true;
-  }
-  if(IRQ & SX126X_IRQ_CRC_ERROR)
-  {
-    Serial.println(F("CRC Error"));
-    interrupts.crc_error = true;
-  }
-  if(IRQ & SX126X_IRQ_CAD_DONE)
-  {
-    Serial.println(F("CAD Done"));
-    interrupts.cad_done = true;
-  }
-  if(IRQ & SX126X_IRQ_CAD_DETECTED)
-  {
-    Serial.println(F("CAD Detected"));
-    interrupts.cad_detected = true;
-  }
-  if(IRQ & SX126X_IRQ_TIMEOUT)
-  {
-    Serial.println(F("IRQ Timeout"));
-    interrupts.timeout = true;
-  }
-  if(IRQ & SX126X_IRQ_LR_FHSS_HOP)
-  {
-    Serial.println(F("Frequency Hop"));
-    interrupts.lr_fhss_hop = true;
-  }
+  return sx126x.api_status;
 }
-sx126x_status_t get_command_status()
+
+sx126x_chip_status_t get_chip_status()
 {
-  return command_status;
+  sx126x_get_status(sx126x.reserved, &sx126x.chip_status);
+  return sx126x.chip_status;
 }
+
 uint8_t get_payload_length()
 {
-  if(packet_type == SX126X_PKT_TYPE_LORA)
+  if(sx126x.packet_type == SX126X_PKT_TYPE_LORA)
   {
-    return lora_packet_params.pld_len_in_bytes;
+    return sx126x.lora_packet_params.pld_len_in_bytes;
   }
   else
   {
-    return gfsk_packet_params.pld_len_in_bytes;
+    return sx126x.gfsk_packet_params.pld_len_in_bytes;
   }
 }
+
 uint16_t get_preamble_length()
 {
-  if(packet_type == SX126X_PKT_TYPE_LORA)
+  if(sx126x.packet_type == SX126X_PKT_TYPE_LORA)
   {
-    return lora_packet_params.preamble_len_in_symb;
+    return sx126x.lora_packet_params.preamble_len_in_symb;
   }
   else
   {
-    return gfsk_packet_params.preamble_len_in_bits;
+    return sx126x.gfsk_packet_params.preamble_len_in_bits;
   }
+}
+
+sx126x_pkt_type_t get_packet_type()
+{
+  return sx126x.packet_type;
+}
+
+uint8_t get_lora_sync_word()
+{
+  return sx126x.lora_sync_word;
+}
+
+void get_gfsk_sync_word(uint8_t* sync_word)
+{
+  memcpy(sync_word, sx126x.gfsk_sync_word, sx126x.gfsk_packet_params.sync_word_len_in_bits / 8);
 }
 
 
 
+
+
+// Victor Kalenda Addition End
 
 
 
@@ -1606,7 +1793,7 @@ void sx126x_set_sleep( const void* context, const sx126x_sleep_cfgs_t cfg )
         ( uint8_t ) cfg,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_SLEEP, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_SLEEP, 0, 0 );
 }
 
 void sx126x_set_standby( const void* context, const sx126x_standby_cfg_t cfg )
@@ -1616,7 +1803,7 @@ void sx126x_set_standby( const void* context, const sx126x_standby_cfg_t cfg )
         ( uint8_t ) cfg,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_STANDBY, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_STANDBY, 0, 0 );
 }
 
 void sx126x_set_fs( const void* context )
@@ -1625,7 +1812,7 @@ void sx126x_set_fs( const void* context )
         SX126X_SET_FS,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_FS, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_FS, 0, 0 );
 }
 
 void sx126x_stop_timer_on_preamble( const void* context, const bool enable )
@@ -1635,7 +1822,7 @@ void sx126x_stop_timer_on_preamble( const void* context, const bool enable )
         ( enable == true ) ? 1 : 0,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_STOP_TIMER_ON_PREAMBLE, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_STOP_TIMER_ON_PREAMBLE, 0, 0 );
 }
 
 void sx126x_set_rx_duty_cycle( const void* context, const uint32_t rx_time_in_ms, const uint32_t sleep_time_in_ms )
@@ -1643,7 +1830,7 @@ void sx126x_set_rx_duty_cycle( const void* context, const uint32_t rx_time_in_ms
     const uint32_t rx_time_in_rtc_step    = sx126x_convert_timeout_in_ms_to_rtc_step( rx_time_in_ms );
     const uint32_t sleep_time_in_rtc_step = sx126x_convert_timeout_in_ms_to_rtc_step( sleep_time_in_ms );
 
-    command_status = sx126x_set_rx_duty_cycle_with_timings_in_rtc_step( context, rx_time_in_rtc_step, sleep_time_in_rtc_step );
+    sx126x.api_status = sx126x_set_rx_duty_cycle_with_timings_in_rtc_step( context, rx_time_in_rtc_step, sleep_time_in_rtc_step );
 }
 
 void sx126x_set_cad( const void* context )
@@ -1652,7 +1839,7 @@ void sx126x_set_cad( const void* context )
         SX126X_SET_CAD,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_CAD, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_CAD, 0, 0 );
 }
 
 void sx126x_set_tx_cw( const void* context )
@@ -1661,7 +1848,7 @@ void sx126x_set_tx_cw( const void* context )
         SX126X_SET_TX_CONTINUOUS_WAVE,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_TX_CONTINUOUS_WAVE, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_TX_CONTINUOUS_WAVE, 0, 0 );
 }
 
 void sx126x_set_tx_infinite_preamble( const void* context )
@@ -1670,7 +1857,7 @@ void sx126x_set_tx_infinite_preamble( const void* context )
         SX126X_SET_TX_INFINITE_PREAMBLE,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_TX_INFINITE_PREAMBLE, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_TX_INFINITE_PREAMBLE, 0, 0 );
 }
 
 void sx126x_cal( const void* context, const sx126x_cal_mask_t param )
@@ -1680,7 +1867,7 @@ void sx126x_cal( const void* context, const sx126x_cal_mask_t param )
         ( uint8_t ) param,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_CALIBRATE, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_CALIBRATE, 0, 0 );
 }
 
 void sx126x_cal_img_in_mhz( const void* context, const uint16_t freq1_in_mhz, const uint16_t freq2_in_mhz )
@@ -1692,7 +1879,7 @@ void sx126x_cal_img_in_mhz( const void* context, const uint16_t freq1_in_mhz, co
     const uint8_t freq2 =
         ( freq2_in_mhz + SX126X_IMAGE_CALIBRATION_STEP_IN_MHZ - 1 ) / SX126X_IMAGE_CALIBRATION_STEP_IN_MHZ;
 
-    command_status = sx126x_cal_img( context, freq1, freq2 );
+    sx126x.api_status = sx126x_cal_img( context, freq1, freq2 );
 }
 
 void sx126x_set_rx_tx_fallback_mode( const void* context, const sx126x_fallback_modes_t fallback_mode )
@@ -1702,7 +1889,7 @@ void sx126x_set_rx_tx_fallback_mode( const void* context, const sx126x_fallback_
         ( uint8_t ) fallback_mode,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_RX_TX_FALLBACK_MODE, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_RX_TX_FALLBACK_MODE, 0, 0 );
 }
 
 //
@@ -1717,7 +1904,7 @@ void sx126x_set_dio_irq_params( const void* context, const uint16_t irq_mask, co
         ( uint8_t )( dio2_mask >> 0 ), ( uint8_t )( dio3_mask >> 8 ), ( uint8_t )( dio3_mask >> 0 ),
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_DIO_IRQ_PARAMS, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_DIO_IRQ_PARAMS, 0, 0 );
 }
 
 void sx126x_get_irq_status( const void* context, sx126x_irq_mask_t* irq )
@@ -1737,7 +1924,7 @@ void sx126x_get_irq_status( const void* context, sx126x_irq_mask_t* irq )
         *irq = ( ( sx126x_irq_mask_t ) irq_local[0] << 8 ) + ( ( sx126x_irq_mask_t ) irq_local[1] << 0 );
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_clear_irq_status( const void* context, const sx126x_irq_mask_t irq_mask )
@@ -1748,7 +1935,7 @@ void sx126x_clear_irq_status( const void* context, const sx126x_irq_mask_t irq_m
         ( uint8_t )( irq_mask >> 0 ),
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_CLR_IRQ_STATUS, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_CLR_IRQ_STATUS, 0, 0 );
 }
 
 void sx126x_get_and_clear_irq_status( const void* context, sx126x_irq_mask_t* irq )
@@ -1757,11 +1944,11 @@ void sx126x_get_and_clear_irq_status( const void* context, sx126x_irq_mask_t* ir
 
     sx126x_get_irq_status( context, &sx126x_irq_mask );
 
-    if( ( command_status == SX126X_STATUS_OK ) && ( sx126x_irq_mask != 0 ) )
+    if( ( sx126x.api_status == SX126X_STATUS_OK ) && ( sx126x_irq_mask != 0 ) )
     {
         sx126x_clear_irq_status( context, sx126x_irq_mask );
     }
-    if( ( command_status == SX126X_STATUS_OK ) && ( irq != NULL ) )
+    if( ( sx126x.api_status == SX126X_STATUS_OK ) && ( irq != NULL ) )
     {
         *irq = sx126x_irq_mask;
     }
@@ -1774,7 +1961,7 @@ void sx126x_set_dio2_as_rf_sw_ctrl( const void* context, const bool enable )
         ( enable == true ) ? 1 : 0,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_DIO2_AS_RF_SWITCH_CTRL, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_DIO2_AS_RF_SWITCH_CTRL, 0, 0 );
 }
 
 void sx126x_set_dio3_as_tcxo_ctrl( const void* context, const sx126x_tcxo_ctrl_voltages_t tcxo_voltage, const uint32_t timeout )
@@ -1784,7 +1971,7 @@ void sx126x_set_dio3_as_tcxo_ctrl( const void* context, const sx126x_tcxo_ctrl_v
         ( uint8_t )( timeout >> 8 ),  ( uint8_t )( timeout >> 0 ),
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_DIO3_AS_TCXO_CTRL, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_DIO3_AS_TCXO_CTRL, 0, 0 );
 }
 
 //
@@ -1798,7 +1985,7 @@ void sx126x_get_pkt_type( const void* context, sx126x_pkt_type_t* pkt_type )
         SX126X_NOP,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_read( context, buf, SX126X_SIZE_GET_PKT_TYPE, ( uint8_t* ) pkt_type, 1 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_read( context, buf, SX126X_SIZE_GET_PKT_TYPE, ( uint8_t* ) pkt_type, 1 );
 }
 
 void sx126x_set_cad_params( const void* context, const sx126x_cad_params_t* params )
@@ -1814,7 +2001,7 @@ void sx126x_set_cad_params( const void* context, const sx126x_cad_params_t* para
         ( uint8_t )( params->cad_timeout >> 0 ),
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_CAD_PARAMS, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_CAD_PARAMS, 0, 0 );
 }
 
 void sx126x_set_lora_symb_nb_timeout( const void* context, const uint8_t nb_of_symbs )
@@ -1845,7 +2032,7 @@ void sx126x_set_lora_symb_nb_timeout( const void* context, const uint8_t nb_of_s
         status      = sx126x_write_register( context, SX126X_REG_LR_SYNCH_TIMEOUT, &reg, 1 );
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 //
@@ -1870,7 +2057,7 @@ void sx126x_get_status( const void* context, sx126x_chip_status_t* radio_status 
             ( sx126x_chip_modes_t )( ( status_local & SX126X_CHIP_MODES_MASK ) >> SX126X_CHIP_MODES_POS );
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_get_rx_buffer_status( const void* context, sx126x_rx_buffer_status_t* rx_buffer_status )
@@ -1891,7 +2078,7 @@ void sx126x_get_rx_buffer_status( const void* context, sx126x_rx_buffer_status_t
         rx_buffer_status->buffer_start_pointer = status_local[1];
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_get_gfsk_pkt_status( const void* context, sx126x_pkt_status_gfsk_t* pkt_status )
@@ -1924,7 +2111,7 @@ void sx126x_get_gfsk_pkt_status( const void* context, sx126x_pkt_status_gfsk_t* 
         pkt_status->rssi_avg  = ( int8_t )( -pkt_status_local[2] >> 1 );
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_get_lora_pkt_status( const void* context, sx126x_pkt_status_lora_t* pkt_status )
@@ -1946,7 +2133,7 @@ void sx126x_get_lora_pkt_status( const void* context, sx126x_pkt_status_lora_t* 
         pkt_status->signal_rssi_pkt_in_dbm = ( int8_t )( -pkt_status_local[2] >> 1 );
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_get_rssi_inst( const void* context, int16_t* rssi_in_dbm )
@@ -1965,7 +2152,7 @@ void sx126x_get_rssi_inst( const void* context, int16_t* rssi_in_dbm )
         *rssi_in_dbm = ( int8_t )( -rssi_local >> 1 );
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_get_gfsk_stats( const void* context, sx126x_stats_gfsk_t* stats )
@@ -1987,7 +2174,7 @@ void sx126x_get_gfsk_stats( const void* context, sx126x_stats_gfsk_t* stats )
         stats->nb_pkt_len_error = ( ( uint16_t ) stats_local[4] << 8 ) + ( uint16_t ) stats_local[5];
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_get_lora_stats( const void* context, sx126x_stats_lora_t* stats )
@@ -2008,7 +2195,7 @@ void sx126x_get_lora_stats( const void* context, sx126x_stats_lora_t* stats )
         stats->nb_pkt_crc_error    = ( ( uint16_t ) stats_local[2] << 8 ) + ( uint16_t ) stats_local[3];
         stats->nb_pkt_header_error = ( ( uint16_t ) stats_local[4] << 8 ) + ( uint16_t ) stats_local[5];
     }
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_reset_stats( const void* context )
@@ -2017,7 +2204,7 @@ void sx126x_reset_stats( const void* context )
         SX126X_RESET_STATS, SX126X_NOP, SX126X_NOP, SX126X_NOP, SX126X_NOP, SX126X_NOP, SX126X_NOP,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_RESET_STATS, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_RESET_STATS, 0, 0 );
 }
 
 //
@@ -2026,12 +2213,12 @@ void sx126x_reset_stats( const void* context )
 
 void sx126x_reset( const void* context )
 {
-    command_status = ( sx126x_status_t ) sx126x_hal_reset( context );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_reset( context );
 }
 
 void sx126x_wakeup( const void* context )
 {
-    command_status = ( sx126x_status_t ) sx126x_hal_wakeup( context );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_wakeup( context );
 }
 
 void sx126x_get_gfsk_bw_param( const uint32_t bw, uint8_t* param )
@@ -2052,7 +2239,7 @@ void sx126x_get_gfsk_bw_param( const uint32_t bw, uint8_t* param )
         }
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 uint32_t sx126x_get_lora_bw_in_hz( sx126x_lora_bw_t bw )
@@ -2108,28 +2295,28 @@ void sx126x_get_random_numbers( const void* context, uint32_t* numbers, unsigned
     status = sx126x_read_register( context, SX126X_REG_ANA_LNA, &tmp_ana_lna, 1 );
     if( status != SX126X_STATUS_OK )
     {
-        command_status = status;
+        sx126x.api_status = status;
         return;
     }
     tmp    = tmp_ana_lna & ~( 1 << 0 );
     status = sx126x_write_register( context, SX126X_REG_ANA_LNA, &tmp, 1 );
     if( status != SX126X_STATUS_OK )
     {
-        command_status = status;
+        sx126x.api_status = status;
         return;
     }
 
     status = sx126x_read_register( context, SX126X_REG_ANA_MIXER, &tmp_ana_mixer, 1 );
     if( status != SX126X_STATUS_OK )
     {
-        command_status = status;
+        sx126x.api_status = status;
         return;
     }
     tmp    = tmp_ana_mixer & ~( 1 << 7 );
     status = sx126x_write_register( context, SX126X_REG_ANA_MIXER, &tmp, 1 );
     if( status != SX126X_STATUS_OK )
     {
-        command_status = status;
+        sx126x.api_status = status;
         return;
     }
 
@@ -2137,7 +2324,7 @@ void sx126x_get_random_numbers( const void* context, uint32_t* numbers, unsigned
     status = sx126x_set_rx_with_timeout_in_rtc_step( context, SX126X_RX_CONTINUOUS );
     if( status != SX126X_STATUS_OK )
     {
-        command_status = status;
+        sx126x.api_status = status;
         return;
     }
 
@@ -2147,13 +2334,13 @@ void sx126x_get_random_numbers( const void* context, uint32_t* numbers, unsigned
         status = sx126x_read_register( context, SX126X_REG_RNGBASEADDRESS, ( uint8_t* ) &numbers[i], 4 );
         if( status != SX126X_STATUS_OK )
         {
-            command_status = status;
+            sx126x.api_status = status;
             return;
         }
     }
 
     sx126x_set_standby( context, SX126X_STANDBY_CFG_RC );
-    if( command_status != SX126X_STATUS_OK )
+    if( sx126x.api_status != SX126X_STATUS_OK )
     {
         return;
     }
@@ -2162,12 +2349,12 @@ void sx126x_get_random_numbers( const void* context, uint32_t* numbers, unsigned
     status = sx126x_write_register( context, SX126X_REG_ANA_LNA, &tmp_ana_lna, 1 );
     if( status != SX126X_STATUS_OK )
     {
-        command_status = status;
+        sx126x.api_status = status;
         return;
     }
     status = sx126x_write_register( context, SX126X_REG_ANA_MIXER, &tmp_ana_mixer, 1 );
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 //
@@ -2178,19 +2365,19 @@ void sx126x_cfg_rx_boosted( const void* context, const bool state )
 {
     if( state == true )
     {
-        command_status = sx126x_write_register( context, SX126X_REG_RXGAIN, ( const uint8_t[] ){ 0x96 }, 1 );
+        sx126x.api_status = sx126x_write_register( context, SX126X_REG_RXGAIN, ( const uint8_t[] ){ 0x96 }, 1 );
     }
     else
     {
-        command_status = sx126x_write_register( context, SX126X_REG_RXGAIN, ( const uint8_t[] ){ 0x94 }, 1 );
+        sx126x.api_status = sx126x_write_register( context, SX126X_REG_RXGAIN, ( const uint8_t[] ){ 0x94 }, 1 );
     }
 }
 
 void sx126x_set_gfsk_sync_word( const void* context, const uint8_t* sync_word, const uint8_t sync_word_len )
 {
     // Victor Kalenda Addition Start
-    memcpy(gfsk_sync_word, sync_word, sync_word_len);
-    gfsk_packet_params.sync_word_len_in_bits = 8 * sync_word_len;
+    memcpy(sx126x.gfsk_sync_word, sync_word, sync_word_len);
+    sx126x.gfsk_packet_params.sync_word_len_in_bits = 8 * sync_word_len;
     // Victor Kalenda Addition End
 
     sx126x_status_t status = SX126X_STATUS_ERROR;
@@ -2202,13 +2389,13 @@ void sx126x_set_gfsk_sync_word( const void* context, const uint8_t* sync_word, c
         status = sx126x_write_register( context, SX126X_REG_SYNCWORDBASEADDRESS, buf, 8 );
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_set_lora_sync_word( const void* context, const uint8_t sync_word )
 {
     // Victor Kalenda Addition Start
-    lora_sync_word = sync_word;
+    sx126x.lora_sync_word = sync_word;
     // Victor Kalenda Addition End
 
     sx126x_status_t status    = SX126X_STATUS_ERROR;
@@ -2224,21 +2411,21 @@ void sx126x_set_lora_sync_word( const void* context, const uint8_t sync_word )
         status = sx126x_write_register( context, SX126X_REG_LR_SYNCWORD, buffer, 2 );
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_set_gfsk_crc_seed( const void* context, uint16_t seed )
 {
     uint8_t s[] = { ( uint8_t )( seed >> 8 ), ( uint8_t ) seed };
 
-    command_status = sx126x_write_register( context, SX126X_REG_CRCSEEDBASEADDRESS, s, sizeof( s ) );
+    sx126x.api_status = sx126x_write_register( context, SX126X_REG_CRCSEEDBASEADDRESS, s, sizeof( s ) );
 }
 
 void sx126x_set_gfsk_crc_polynomial( const void* context, const uint16_t polynomial )
 {
     uint8_t poly[] = { ( uint8_t )( polynomial >> 8 ), ( uint8_t ) polynomial };
 
-    command_status = sx126x_write_register( context, SX126X_REG_CRCPOLYBASEADDRESS, poly, sizeof( poly ) );
+    sx126x.api_status = sx126x_write_register( context, SX126X_REG_CRCPOLYBASEADDRESS, poly, sizeof( poly ) );
 }
 
 void sx126x_set_gfsk_whitening_seed( const void* context, const uint16_t seed )
@@ -2260,19 +2447,19 @@ void sx126x_set_gfsk_whitening_seed( const void* context, const uint16_t seed )
         }
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_set_ocp_value( const void* context, const uint8_t ocp_in_step_of_2_5_ma )
 {
-    command_status = ( sx126x_status_t ) sx126x_write_register( context, SX126X_REG_OCP, &ocp_in_step_of_2_5_ma, 1 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_write_register( context, SX126X_REG_OCP, &ocp_in_step_of_2_5_ma, 1 );
 }
 
 void sx126x_set_trimming_capacitor_values( const void* context, const uint8_t trimming_cap_xta, const uint8_t trimming_cap_xtb )
 {
     uint8_t trimming_capacitor_values[2] = { trimming_cap_xta, trimming_cap_xtb };
 
-    command_status = ( sx126x_status_t ) sx126x_write_register( context, SX126X_REG_XTATRIM, trimming_capacitor_values, 2 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_write_register( context, SX126X_REG_XTATRIM, trimming_capacitor_values, 2 );
 }
 
 void sx126x_add_registers_to_retention_list( const void* context, const uint16_t* register_addr, uint8_t register_nb )
@@ -2311,7 +2498,7 @@ void sx126x_add_registers_to_retention_list( const void* context, const uint16_t
                 }
                 else
                 {
-                    command_status = SX126X_STATUS_ERROR;
+                    sx126x.api_status = SX126X_STATUS_ERROR;
                     return;
                 }
             }
@@ -2323,7 +2510,7 @@ void sx126x_add_registers_to_retention_list( const void* context, const uint16_t
         }
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_init_retention_list( const void* context )
@@ -2353,7 +2540,7 @@ void sx126x_get_lora_params_from_header( const void* context, sx126x_lora_cr_t* 
         }
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 
@@ -2382,32 +2569,51 @@ void sx126x_get_lora_params_from_header( const void* context, sx126x_lora_cr_t* 
 // Refer to section 14.5
 void set_lora()
 {
+  // Auto Low Data Rate Optimization, Refer to section 6.1.1.1 for symbol rate. The inverse of this function is the symbol time
+  if(sx126x.auto_ldro)
+  {
+    // Find the lora bandwidth
+    double bandwidth = 0;
+    for(uint8_t i = 0; i < ( sizeof( lora_bw ) / sizeof( lora_bw_t )); i++ )
+    {
+      if(sx126x.lora_modulation_params.bw == lora_bw[i].param)
+      {
+        bandwidth = lora_bw[i].bw;
+        break;
+      }
+    } 
+    // Refer to section 6.1.1.4 for 16.38 ms constraint
+    // This turns out to be the symbol time for sf 11 and bw 125khz, using the inverse of the symbol rate yields a more precise value of 16.384ms.
+    if( pow(2, (double) sx126x.lora_modulation_params.sf) / bandwidth > 16.384 )
+    {
+      sx126x.lora_modulation_params.ldro = true;
+    }
+    else
+    {
+      sx126x.lora_modulation_params.ldro = false;
+    }
+  }
   // Set the packet type
-  sx126x_set_pkt_type(reserved, packet_type);
+  sx126x_set_pkt_type(sx126x.reserved, sx126x.packet_type);
 
   // Set the modulation parameters
-  sx126x_set_lora_mod_params(reserved, &lora_modulation_params);
+  sx126x_set_lora_mod_params(sx126x.reserved, &sx126x.lora_modulation_params);
 
   // Set the packet parameters
-  sx126x_set_lora_pkt_params(reserved, &lora_packet_params);
+  sx126x_set_lora_pkt_params(sx126x.reserved, &sx126x.lora_packet_params);
 }
 
 // Refer to section 14.5
 void set_gfsk()
 {
   // Set the packet type
-  sx126x_set_pkt_type(reserved, packet_type);
+  sx126x_set_pkt_type(sx126x.reserved, sx126x.packet_type);
 
   // Set the modulation parameters
-  sx126x_set_gfsk_mod_params(reserved , &gfsk_modulation_params );
+  sx126x_set_gfsk_mod_params(sx126x.reserved , &sx126x.gfsk_modulation_params );
 
   // Set the packet parameters
-  sx126x_set_gfsk_pkt_params(reserved, &gfsk_packet_params);
-}
-
-void set_fhss()
-{
-  Serial.println(F("Not Supported"));
+  sx126x_set_gfsk_pkt_params(sx126x.reserved, &sx126x.gfsk_packet_params);
 }
 
 // function for if the user sets and invalid bitrate or frequency deviation
@@ -2415,13 +2621,81 @@ bool correct_bandwidth(uint32_t raw_br, uint32_t fdev)
 {
   for(uint8_t i = 0; i < ( sizeof( gfsk_bw ) / sizeof( gfsk_bw_t )); i++ )
   {
-    if((raw_br + (2 * fdev) + (2 * crystal_frequency_error)) < gfsk_bw[i].bw)
+    if((raw_br + (2 * fdev) + (2 * sx126x.crystal_frequency_error)) < gfsk_bw[i].bw)
     {
-      gfsk_modulation_params.bw_dsb_param = (sx126x_gfsk_bw_t)gfsk_bw[i].param;
+      sx126x.gfsk_modulation_params.bw_dsb_param = (sx126x_gfsk_bw_t)gfsk_bw[i].param;
       return true;
     }
   }
   return false;
+}
+
+void check_IRQ()
+{
+  sx126x_get_and_clear_irq_status(sx126x.reserved, &sx126x.IRQ);
+  //Serial.print(F("IRQ Status = "));
+  //Serial.println(sx126x.IRQ, BIN);
+  if(sx126x.IRQ & SX126X_IRQ_NONE)
+  {
+    return;
+  }
+  if(sx126x.IRQ & SX126X_IRQ_TX_DONE)
+  {
+    sx126x.interrupts.tx_done = true;
+  }
+  if(sx126x.IRQ & SX126X_IRQ_RX_DONE)
+  {
+    sx126x.interrupts.rx_done = true;
+    // Refer to section 15.3
+    sx126x_stop_rtc(sx126x.reserved);
+  }
+  if(sx126x.IRQ & SX126X_IRQ_PREAMBLE_DETECTED)
+  {
+    sx126x.interrupts.preamble_detected = true;
+  }
+  if(sx126x.IRQ & SX126X_IRQ_SYNC_WORD_VALID)
+  {
+    sx126x.interrupts.sync_word_valid = true;
+  }
+  if(sx126x.IRQ & SX126X_IRQ_HEADER_VALID)
+  {
+    sx126x.interrupts.header_valid = true;
+  }
+  if(sx126x.IRQ & SX126X_IRQ_HEADER_ERROR)
+  {
+    sx126x.interrupts.header_error = true;
+  }
+  if(sx126x.IRQ & SX126X_IRQ_CRC_ERROR)
+  {
+    sx126x.interrupts.crc_error = true;
+  }
+  if(sx126x.IRQ & SX126X_IRQ_CAD_DONE)
+  {
+    sx126x.interrupts.cad_done = true;
+  }
+  if(sx126x.IRQ & SX126X_IRQ_CAD_DETECTED)
+  {
+    sx126x.interrupts.cad_detected = true;
+  }
+  if(sx126x.IRQ & SX126X_IRQ_TIMEOUT)
+  {
+    sx126x.interrupts.timeout = true;
+  }
+  if(sx126x.IRQ & SX126X_IRQ_LR_FHSS_HOP)
+  {
+    sx126x.interrupts.lr_fhss_hop = true;
+  }
+}
+
+void check_if_reset_is_required_now()
+{
+  sx126x_get_status(sx126x.reserved, &sx126x.chip_status);
+  // If the chip is in receive mode, reset the chip immediately
+  if(sx126x.chip_status.chip_mode <= SX126X_CHIP_MODE_RX && sx126x.reset_params)
+  {
+    set_packet_type(sx126x.packet_type); 
+    sx126x.reset_params = false;
+  }
 }
 
 // Victor Kalenda Addition End
@@ -2445,7 +2719,7 @@ void sx126x_write_buffer( const void* context, const uint8_t offset, const uint8
         offset,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_WRITE_BUFFER, buffer, size );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_WRITE_BUFFER, buffer, size );
 }
 
 void sx126x_read_buffer( const void* context, const uint8_t offset, uint8_t* buffer, const uint8_t size )
@@ -2456,7 +2730,7 @@ void sx126x_read_buffer( const void* context, const uint8_t offset, uint8_t* buf
         SX126X_NOP,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_read( context, buf, SX126X_SIZE_READ_BUFFER, buffer, size );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_read( context, buf, SX126X_SIZE_READ_BUFFER, buffer, size );
 }
 
 sx126x_status_t sx126x_set_buffer_base_address( const void* context, const uint8_t tx_base_address, const uint8_t rx_base_address )
@@ -2500,28 +2774,37 @@ sx126x_status_t sx126x_set_rx_with_timeout_in_rtc_step( const void* context, con
 
 void sx126x_set_rx( const void* context, const uint32_t timeout_in_ms )
 {
-    if( timeout_in_ms > SX126X_MAX_TIMEOUT_IN_MS )
+    if( timeout_in_ms > SX126X_MAX_TIMEOUT_IN_MS && !SX126X_RX_CONTINUOUS )
     {
-        command_status = SX126X_STATUS_UNKNOWN_VALUE;
+        sx126x.api_status = SX126X_STATUS_UNKNOWN_VALUE;
         return;
     }
 
-    const uint32_t timeout_in_rtc_step = sx126x_convert_timeout_in_ms_to_rtc_step( timeout_in_ms );
+    uint32_t timeout_in_rtc_step = 0;
 
-    command_status = sx126x_set_rx_with_timeout_in_rtc_step( context, timeout_in_rtc_step );
+    if(timeout_in_ms == SX126X_RX_CONTINUOUS)
+    {
+      timeout_in_rtc_step = SX126X_RX_CONTINUOUS;
+    }
+    else
+    {
+      timeout_in_rtc_step = sx126x_convert_timeout_in_ms_to_rtc_step( timeout_in_ms );
+    }
+
+    sx126x.api_status = sx126x_set_rx_with_timeout_in_rtc_step( context, timeout_in_rtc_step );
 }
 
 void sx126x_set_tx( const void* context, const uint32_t timeout_in_ms )
 {
     if( timeout_in_ms > SX126X_MAX_TIMEOUT_IN_MS )
     {
-        command_status = SX126X_STATUS_UNKNOWN_VALUE;
+        sx126x.api_status = SX126X_STATUS_UNKNOWN_VALUE;
         return;
     }
 
     const uint32_t timeout_in_rtc_step = sx126x_convert_timeout_in_ms_to_rtc_step( timeout_in_ms );
 
-    command_status = sx126x_set_tx_with_timeout_in_rtc_step( context, timeout_in_rtc_step );
+    sx126x.api_status = sx126x_set_tx_with_timeout_in_rtc_step( context, timeout_in_rtc_step );
 }
 
 void sx126x_set_reg_mode( const void* context, const sx126x_reg_mod_t mode )
@@ -2531,7 +2814,7 @@ void sx126x_set_reg_mode( const void* context, const sx126x_reg_mod_t mode )
         ( uint8_t ) mode,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_REGULATOR_MODE, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_REGULATOR_MODE, 0, 0 );
 }
 
 sx126x_status_t sx126x_cal_img( const void* context, const uint8_t freq1, const uint8_t freq2 )
@@ -2566,7 +2849,7 @@ void sx126x_set_pa_cfg( const void* context, const sx126x_pa_cfg_params_t* param
         SX126X_SET_PA_CFG, params->pa_duty_cycle, params->hp_max, params->device_sel, params->pa_lut,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_PA_CFG, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_PA_CFG, 0, 0 );
 }
 
 sx126x_status_t sx126x_write_register( const void* context, const uint16_t address, const uint8_t* buffer, const uint8_t size )
@@ -2608,9 +2891,9 @@ sx126x_status_t sx126x_set_rf_freq_in_pll_steps( const void* context, const uint
 
 void sx126x_set_rf_freq( const void* context, const uint32_t freq_in_hz )
 {
-    frequency = freq_in_hz; // Victor Kalenda Addition
+    sx126x.frequency = freq_in_hz; // Victor Kalenda Addition
     const uint32_t freq = sx126x_convert_freq_in_hz_to_pll_step( freq_in_hz );
-    command_status = sx126x_set_rf_freq_in_pll_steps( context, freq );
+    sx126x.api_status = sx126x_set_rf_freq_in_pll_steps( context, freq );
 }
 
 void sx126x_set_pkt_type( const void* context, const sx126x_pkt_type_t pkt_type )
@@ -2620,7 +2903,7 @@ void sx126x_set_pkt_type( const void* context, const sx126x_pkt_type_t pkt_type 
         ( uint8_t ) pkt_type,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_PKT_TYPE, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_PKT_TYPE, 0, 0 );
 }
 
 void sx126x_set_tx_params( const void* context, const int8_t pwr_in_dbm, const sx126x_ramp_time_t ramp_time )
@@ -2631,7 +2914,7 @@ void sx126x_set_tx_params( const void* context, const int8_t pwr_in_dbm, const s
         ( uint8_t ) ramp_time,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_TX_PARAMS, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_TX_PARAMS, 0, 0 );
 }
 
 void sx126x_set_gfsk_mod_params( const void* context, const sx126x_mod_params_gfsk_t* params )
@@ -2653,7 +2936,7 @@ void sx126x_set_gfsk_mod_params( const void* context, const sx126x_mod_params_gf
         status = sx126x_tx_modulation_workaround( context, SX126X_PKT_TYPE_GFSK, ( sx126x_lora_bw_t ) 0 );
         // WORKAROUND END
     }
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_set_lora_mod_params( const void* context, const sx126x_mod_params_lora_t* params )
@@ -2673,7 +2956,7 @@ void sx126x_set_lora_mod_params( const void* context, const sx126x_mod_params_lo
         // WORKAROUND END
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_set_gfsk_pkt_params( const void* context, const sx126x_pkt_params_gfsk_t* params )
@@ -2691,7 +2974,7 @@ void sx126x_set_gfsk_pkt_params( const void* context, const sx126x_pkt_params_gf
         ( uint8_t )( params->dc_free ),
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_PKT_PARAMS_GFSK, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_SET_PKT_PARAMS_GFSK, 0, 0 );
 }
 
 void sx126x_set_lora_pkt_params( const void* context, const sx126x_pkt_params_lora_t* params )
@@ -2731,7 +3014,7 @@ void sx126x_set_lora_pkt_params( const void* context, const sx126x_pkt_params_lo
     }
     // WORKAROUND END
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 //
@@ -2804,7 +3087,7 @@ void sx126x_get_device_errors( const void* context, sx126x_errors_mask_t* errors
         *errors = ( ( sx126x_errors_mask_t ) errors_local[0] << 8 ) + ( ( sx126x_errors_mask_t ) errors_local[1] << 0 );
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_clear_device_errors( const void* context )
@@ -2815,7 +3098,7 @@ void sx126x_clear_device_errors( const void* context )
         SX126X_NOP,
     };
 
-    command_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_CLR_DEVICE_ERRORS, 0, 0 );
+    sx126x.api_status = ( sx126x_status_t ) sx126x_hal_write( context, buf, SX126X_SIZE_CLR_DEVICE_ERRORS, 0, 0 );
 }
 
 uint32_t sx126x_get_lora_time_on_air_numerator( const sx126x_pkt_params_lora_t* pkt_p, const sx126x_mod_params_lora_t* mod_p )
@@ -2923,7 +3206,7 @@ void sx126x_cfg_tx_clamp( const void* context )
         status = sx126x_write_register( context, SX126X_REG_TX_CLAMP_CFG, &reg_value, 1 );
     }
 
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 void sx126x_stop_rtc( const void* context )
@@ -2945,7 +3228,7 @@ void sx126x_stop_rtc( const void* context )
         }
     }
     
-    command_status = status;
+    sx126x.api_status = status;
 }
 
 /* --- EOF ------------------------------------------------------------------ */

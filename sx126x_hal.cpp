@@ -6,7 +6,7 @@ uint8_t reset = 0;
 uint8_t nss = 0;
 bool sleeping = false;
 
-void sx126x_hal_init( uint8_t cs_pin, uint8_t reset_pin, uint8_t busy_pin, uint16_t dio1)
+void sx126x_hal_init( uint8_t cs_pin, uint8_t reset_pin, uint8_t busy_pin, int8_t dio1)
 {
   nss = cs_pin;
   reset = reset_pin;
@@ -55,7 +55,7 @@ sx126x_hal_status_t sx126x_hal_write( const void* context, const uint8_t* comman
   digitalWrite(nss,1);
 
   // SX126x_SET_SLEEP = 0x84 in sx126x.cpp
-  if( command[0] != 0x84)
+  if( command[0] == 0x84)
   {
     // Refer to section 8.3.1
     sleeping = true;
