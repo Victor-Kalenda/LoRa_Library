@@ -959,7 +959,7 @@ void initialize_chip(start_params_t setup)
     sx126x_set_dio_irq_params(sx126x.reserved, SX126X_IRQ_ALL, SX126X_IRQ_ALL, SX126X_IRQ_NONE, SX126X_IRQ_NONE);
   }
 
-  // Refer to section 13.1.5, this is a default setting used for battery concious applications
+  // Refer to section 13.1.5, this is a default setting used for battery conscious applications
   // Refer to section 13.4.9, 0x00 will deactivate the timeout to locking the LoRa modem (making this more susceptible to false detections)
   sx126x_set_lora_symb_nb_timeout(sx126x.reserved, 0x00);
 
@@ -1076,14 +1076,12 @@ void lora_set_ldro(bool ldro_is_on)
 void lora_set_auto_ldro(bool auto_ldro_is_on)
 {
   sx126x.auto_ldro = auto_ldro_is_on;
-  // instantly check if ldro should be activated
-  // figure out a way to calculate the symbol time
-  // Loranet lorawan spec handles ldro in sx126x implementation (RadioSetTxConfig())
 }
 
 
 
 // Packet parameter setters gfsk (sync word length in bits handled in sx126x_set_gfsk_sync_word())
+
 bool gfsk_set_pre_len(uint16_t preamble_len_in_bits)
 {
   // Refer to section 6.2.3.1
@@ -1167,6 +1165,7 @@ void gfsk_whitening_on(sx126x_gfsk_dc_free_t dc_free)
 }
 
 // Modulation parameter setters gfsk
+
 bool gfsk_set_br(uint32_t br_in_bps) // between 600 - 300000 bps
 {
   // Refer to section 6.2.1
@@ -1208,7 +1207,6 @@ bool gfsk_set_br(uint32_t br_in_bps) // between 600 - 300000 bps
   return false;
 }
 
-// There is a mathematical contridiction on section 6.2.1 and section 13.4.5.1. This code was based on section 6.2.1
 bool gfsk_set_fdev(uint32_t fdev_in_hz) // between 600 - 200000 hz
 {
   // Refer to section 6.2.1
@@ -1317,7 +1315,7 @@ void set_packet_type(sx126x_pkt_type_t type)
   }
 }
 
-// Transmit and Receive actuation functions
+// Transmit and Receive functions
 void transmit(uint8_t *buffer)
 {
   // write what you want to transmit to the chip
@@ -1386,7 +1384,7 @@ void read_transmit_buffer(uint8_t* buffer)
   }
 }
 
-void set_transmit_timeout(uint32_t timeout_in_ms) // 262 142 ms is the max timeout, used for receive function
+void set_transmit_timeout(uint32_t timeout_in_ms) // 262 142 ms is the max timeout used the for transmit function
 {
   if(timeout_in_ms < SX126X_MAX_TIMEOUT_IN_MS)
   {
@@ -1417,7 +1415,7 @@ void read_receive_buffer(uint8_t* buffer)
   }
 }
 
-void set_receive_timeout(uint32_t timeout_in_ms) // 262 143 ms is the max timeout, used for receive function
+void set_receive_timeout(uint32_t timeout_in_ms) // 262 142 ms is the max timeout used for the receive function
 {
   if(timeout_in_ms < SX126X_MAX_TIMEOUT_IN_MS || timeout_in_ms == SX126X_RX_CONTINUOUS)
   {
@@ -1596,40 +1594,49 @@ void set_cad_params()
         {
           sx126x.lora_cad_params.cad_detect_peak = 21;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
         case SX126X_LORA_SF8:
         {
           sx126x.lora_cad_params.cad_detect_peak = 22;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
         case SX126X_LORA_SF9:
         {
           sx126x.lora_cad_params.cad_detect_peak = 22;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
         case SX126X_LORA_SF10:
         {
           sx126x.lora_cad_params.cad_detect_peak = 23;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
         case SX126X_LORA_SF11:
         {
           sx126x.lora_cad_params.cad_detect_peak = 25;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
         case SX126X_LORA_SF12:
         {
           sx126x.lora_cad_params.cad_detect_peak = 29;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_08_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
+        default:
+        {
+            Serial.println(F("Spreadfactor not supported"));
+        }
       }
-      sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
       break;
     }
     case SX126X_LORA_BW_125:
@@ -1641,40 +1648,49 @@ void set_cad_params()
         {
           sx126x.lora_cad_params.cad_detect_peak = 22;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_02_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
         case SX126X_LORA_SF8:
         {
           sx126x.lora_cad_params.cad_detect_peak = 22;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_02_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
         case SX126X_LORA_SF9:
         {
           sx126x.lora_cad_params.cad_detect_peak = 23;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
         case SX126X_LORA_SF10:
         {
           sx126x.lora_cad_params.cad_detect_peak = 24;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
         case SX126X_LORA_SF11:
         {
           sx126x.lora_cad_params.cad_detect_peak = 25;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
         case SX126X_LORA_SF12:
         {
           sx126x.lora_cad_params.cad_detect_peak = 28;
           sx126x.lora_cad_params.cad_symb_nb = SX126X_CAD_04_SYMB;
+          sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
           break;
         }
+        default:
+        {
+            Serial.println(F("Spreadfactor not supported"));
+        }
       }
-      sx126x_set_cad_params(sx126x.reserved, &sx126x.lora_cad_params);
       break;
     }
     default:
@@ -1773,10 +1789,6 @@ void get_gfsk_sync_word(uint8_t* sync_word)
 {
   memcpy(sync_word, sx126x.gfsk_sync_word, sx126x.gfsk_packet_params.sync_word_len_in_bits / 8);
 }
-
-
-
-
 
 // Victor Kalenda Addition End
 
@@ -2636,8 +2648,6 @@ bool correct_bandwidth(uint32_t raw_br, uint32_t fdev)
 void check_IRQ()
 {
   sx126x_get_and_clear_irq_status(sx126x.reserved, &sx126x.IRQ);
-  //Serial.print(F("IRQ Status = "));
-  //Serial.println(sx126x.IRQ, BIN);
   if(sx126x.IRQ & SX126X_IRQ_NONE)
   {
     return;
