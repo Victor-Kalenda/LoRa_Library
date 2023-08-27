@@ -1,14 +1,13 @@
 # LoRa_Library
 Library implementation of Semtech's sx126x_driver for Arduino microcontrollers
 
-With LoRa_Library, users will have access to the full potential of the sx126x, written in c for max efficiency.
-The purpose of this library is to help developers research the sx126x transceiver with low cost equipment and 
-little to no unnecessary development costs. All code was based on the sx126x_driver provided by Semtech, with 
-additional functionality solely based on the sx126x datasheet. Upon analysis of LoRa_Library.cpp, users will 
-be able to reference back to specific sections of the sx126x datasheet for all abstract function calls. Allowing
-developers to build a strong foundational understanding for what is required to make the sx126x operate smoothly.
-LoRa_Library does not support FHSS modulation as it is not a transceiver-to-transceiver communication technique
-for the sx126x.
+With LoRa_Library, users will have access to the full potential of the sx126x. The purpose of this library is 
+to help developers research the sx126x transceiver with low cost equipment and little to no unnecessary development 
+costs. All code was based on the sx126x_driver provided by Semtech, with additional functionality solely based on 
+the sx126x datasheet. Upon analysis of LoRa_Library.cpp, users will be able to reference back to specific sections 
+of the sx126x datasheet for all abstract function calls. Allowing developers to build a strong foundational 
+understanding for what is required to make the sx126x operate smoothly. LoRa_Library does not support FHSS 
+modulation as it is not a transceiver-to-transceiver communication technique for the sx126x.
 
 LoRa_Library is an excellent tool for developing your own wireless communication protocol due to it's efficient
 space and time complexity. It is strongly recommended that users get familiar with the sx126x_Testing script to 
