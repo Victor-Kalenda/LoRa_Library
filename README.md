@@ -12,7 +12,8 @@ for the sx126x.
 
 LoRa_Library is an excellent tool for developing your own wireless communication protocol due to it's efficient
 space and time complexity. It is strongly recommended that users get familiar with the sx126x_Testing script to 
-understand the main functions of the sx126x, and the behavour of the sx126x in any given state.
+understand the main functions of the sx126x, and the behavour of the sx126x in any given state. All information
+regarding the use of the sx126x_Testing script can be found on Testing.pdf.
 
 For users who are looking for the bare minimum required to start development of an sx126x based communication
 protocol, it is advised to program your protocol using the sx126x_driver provided by Semtech on the LoraNet 
