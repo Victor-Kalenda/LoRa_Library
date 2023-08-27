@@ -905,8 +905,8 @@ void initialize_chip(start_params_t setup)
   sx126x.lora_modulation_params = {SX126X_LORA_SF7, SX126X_LORA_BW_500, SX126X_LORA_CR_4_8, false}; 
   sx126x.lora_packet_params = {16, SX126X_LORA_PKT_EXPLICIT, 0, true, false};
   sx126x.gfsk_modulation_params = {600, 600, SX126X_GFSK_PULSE_SHAPE_OFF, SX126X_GFSK_BW_373600};
-  sx126x.gfsk_packet_params = {32, SX126X_GFSK_PREAMBLE_DETECTOR_OFF, 8, SX126X_GFSK_ADDRESS_FILTERING_DISABLE,
-            SX126X_GFSK_PKT_FIX_LEN, 3, SX126X_GFSK_CRC_OFF, SX126X_GFSK_DC_FREE_OFF};
+  sx126x.gfsk_packet_params = {32, SX126X_GFSK_PREAMBLE_DETECTOR_OFF, 64, SX126X_GFSK_ADDRESS_FILTERING_DISABLE,
+            SX126X_GFSK_PKT_FIX_LEN, 0, SX126X_GFSK_CRC_OFF, SX126X_GFSK_DC_FREE_OFF};
 
   // Begin communicating to the chip and defining critical parameters
   sx126x.chip = setup.chip;
@@ -965,6 +965,8 @@ void initialize_chip(start_params_t setup)
 
   // Refer to section 12.1, this will identify your transmissions as part of a private network
   sx126x_set_lora_sync_word(sx126x.reserved, sx126x.lora_sync_word);
+  sx126x.gfsk_sync_word = {1, 2, 3, 4, 5, 6, 7, 8};
+  sx126x_set_gfsk_sync_word(sx126x.reserved, sx126x.gfsk_sync_word, 64);
 }
 
 void lora_crc_on(bool crc_is_on)
