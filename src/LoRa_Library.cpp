@@ -965,8 +965,9 @@ void initialize_chip(start_params_t setup)
 
   // Refer to section 12.1, this will identify your transmissions as part of a private network
   sx126x_set_lora_sync_word(sx126x.reserved, sx126x.lora_sync_word);
-  sx126x.gfsk_sync_word = {1, 2, 3, 4, 5, 6, 7, 8};
-  sx126x_set_gfsk_sync_word(sx126x.reserved, sx126x.gfsk_sync_word, 64);
+  uint8_t sync_word[8] = {1,2,3,4,5,6,7,8};
+  memcpy(sx126x.gfsk_sync_word, sync_word, sx126x.gfsk_packet_params.sync_word_len_in_bits / 8);
+  sx126x_set_gfsk_sync_word(sx126x.reserved, sx126x.gfsk_sync_word, 8);
 }
 
 void lora_crc_on(bool crc_is_on)
