@@ -21,10 +21,15 @@ github repository.
 
 Recommended Hardware and Design Considerations
 
-Dorji Applied Technologies have an excellent sx126x transceiver module which can be purchase along with the DAD06 
-development board for testing sx126x transceivers with an Arduino Uno. Alternatively, users can design their own 
-PCB with an ATMEGA328, please be advised that sx126x transceivers are only 3.3V tolerant. Therefore, logic level
-conversion from 5V to 3.3V is required to ensure the sx126x transceiver is not damaged. A workaround to this issue
-can also be to design an ATMEGA328 to run on a 3.3V power supply. For this to work, the microcontroller will 
-require an 8MHz external crystal oscillator according to the ATMEGA328 datasheet for operating at 3.3V, along with
-an FTDI converter to communicate with the microcontroller.
+Dorji Applied Technologies have an excellent FCC compliant sx126x transceiver module which can be purchase along 
+with the DAD06 development board for testing sx126x transceivers with an Arduino Uno. Alternatively, users can 
+design their own PCB with an ATMEGA328, please be advised that sx126x transceivers are only 3.3V tolerant. Therefore, 
+logic level conversion from 5V to 3.3V is required to ensure the sx126x transceiver is not damaged. A workaround to 
+this issue can also be to design an ATMEGA328 to run on a 3.3V power supply. For this to work, the microcontroller 
+will require an 8MHz external crystal oscillator according to the ATMEGA328 datasheet for operating at 3.3V, along 
+with an FTDI converter to communicate with the microcontroller.
+
+![IMG_3292](https://github.com/Victor-Kalenda/LoRa_Library/assets/90730727/19b578fc-3888-47d9-b945-0d6798fc4d3c)
+
+
+
