@@ -957,14 +957,17 @@ void initialize_chip(start_params_t setup)
   {
     // Refer to section 13.3.2
     sx126x_set_dio_irq_params(sx126x.reserved, SX126X_IRQ_ALL, SX126X_IRQ_ALL, SX126X_IRQ_NONE, SX126X_IRQ_NONE);
+    // Refer to section 13.3.5
+    sx126x_set_dio2_as_rf_sw_ctrl(sx126x.reserved, true);
   }
 
   // Refer to section 13.1.5, this is a default setting used for battery conscious applications
   // Refer to section 13.4.9, 0x00 will deactivate the timeout to locking the LoRa modem (making this more susceptible to false detections)
-  sx126x_set_lora_symb_nb_timeout(sx126x.reserved, 0x00);
+  sx126x_set_lora_symb_nb_timeout(sx126x.reserved, 0);
 
   // Refer to section 12.1, this will identify your transmissions as part of a private network
   sx126x_set_lora_sync_word(sx126x.reserved, sx126x.lora_sync_word);
+
   uint8_t sync_word[8] = {1,2,3,4,5,6,7,8};
   memcpy(sx126x.gfsk_sync_word, sync_word, sx126x.gfsk_packet_params.sync_word_len_in_bits / 8);
   sx126x_set_gfsk_sync_word(sx126x.reserved, sx126x.gfsk_sync_word, 8);

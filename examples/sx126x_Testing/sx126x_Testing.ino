@@ -7,6 +7,7 @@
 #include <LoRa_Library.h>
 #include "commands.h"
 
+#define SW 8
 
 const void* reserved;
 
@@ -22,11 +23,17 @@ void setup()
 {
   Serial.begin(9600);
 
+  // Refer to Dorji Applied Technologies DAD06 Development Board Datasheet for pinout
+  // SW Pin on DRF1262T
+  pinMode(SW, OUTPUT);
+  // Activate the antenna switch for testing
+  digitalWrite(SW, HIGH);
+
   start_params_t chip_setup;
-  chip_setup.busy = 15;
+  chip_setup.busy = 3;
   chip_setup.reset = 14;
-  chip_setup.NSS = 10;
-  chip_setup.dio1 = 3;
+  chip_setup.NSS = 7;
+  chip_setup.dio1 = 5; // set dio1 to -1 to deactivate automatic interrupt handling
   chip_setup.chip = SX1262;
   chip_setup.crystal = TCXO;
   chip_setup.crystal_frequency_error = 0;
