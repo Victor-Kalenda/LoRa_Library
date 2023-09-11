@@ -2396,6 +2396,7 @@ void sx126x_set_gfsk_sync_word( const void* context, const uint8_t* sync_word, c
     // Victor Kalenda Addition Start
     memcpy(sx126x.gfsk_sync_word, sync_word, sync_word_len);
     sx126x.gfsk_packet_params.sync_word_len_in_bits = 8 * sync_word_len;
+    sx126x.reset_params = true;
     // Victor Kalenda Addition End
 
     sx126x_status_t status = SX126X_STATUS_ERROR;
@@ -2414,6 +2415,7 @@ void sx126x_set_lora_sync_word( const void* context, const uint8_t sync_word )
 {
     // Victor Kalenda Addition Start
     sx126x.lora_sync_word = sync_word;
+    sx126x.reset_params = true;
     // Victor Kalenda Addition End
 
     sx126x_status_t status    = SX126X_STATUS_ERROR;
