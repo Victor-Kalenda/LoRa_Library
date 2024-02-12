@@ -1145,6 +1145,7 @@ bool gfsk_set_pld_len(uint8_t pld_len_in_bytes)
     sx126x.gfsk_packet_params.pld_len_in_bytes = pld_len_in_bytes;
     check_if_reset_is_required_now();
   }
+  return true;
 }
 
 void gfsk_crc(sx126x_gfsk_crc_types_t crc_type)
